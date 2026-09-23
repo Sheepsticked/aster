@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Wed, 23 Sep 2026 00:00:00 +0000
+Subject: [PATCH] USSD: send the code and read the answer in the UCS-2
+ character set
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: the initialization selects AT+CSCS="UCS2", in which a Quectel
+         modem takes the AT+CUSD string and gives the +CUSD text as UCS-2
+         hex (3GPP TS 27.007); the driver sent the code as packed GSM 7-bit
+         hex, which the modem refuses with ERROR, and unpacked a 7-bit
+         answer the same way (applies on top of 0009)
+
+The code is sent as UCS-2 hex with DCS 15. An answer that is UCS-2 hex is
+decoded as such whatever its DCS; 8-bit data and any other string are
+passed on as they are. A code too long for the command buffer is refused.
+---
+ at_command.c  | 23 ++++++++---------------
+ at_response.c | 27 +++++++++------------------
+ 2 files changed, 17 insertions(+), 33 deletions(-)
+
+diff --git a/at_command.c b/at_command.c
+index 700cedd..a7c1c86 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -393,27 +393,20 @@ EXPORT_DEF int at_enqueue_ussd(struct cpvt *cpvt, const char *code)
+ 	length = STRLEN(cmd);
+ 	int code_len = strlen(code);
+ 
+-	// use 7 bit encoding. 15 is 00001111 in binary and means 'Language using the GSM 7 bit default alphabet; Language unspecified' accodring to GSM 23.038
+-	uint16_t code16[code_len * 2];
+-	uint8_t code_packed[4069];
+-	res = utf8_to_ucs2(code, code_len, code16, sizeof(code16));
++	// The code goes in the TE character set, UCS-2 hex (the initialization sends AT+CSCS="UCS2"); 15 asks the modem
++	// to send it in the GSM 7 bit default alphabet, language unspecified (3GPP TS 23.038).
++	uint16_t code16[code_len + 1];
++	res = utf8_to_ucs2(code, code_len, code16, code_len + 1);
+ 	if (res < 0) {
+ 		chan_quectel_err = E_PARSE_UTF8;
+ 		return -1;
+ 	}
+-	res = gsm7_encode(code16, res, code16);
+-	if (res < 0) {
+-		chan_quectel_err = E_ENCODE_GSM7;
+-		return -1;
+-	}
+-	res = gsm7_pack(code16, res, code_packed, sizeof(code_packed), 0);
+-	if (res < 0) {
+-		chan_quectel_err = E_PACK_GSM7;
++	if (STRLEN(cmd) + (size_t)res * 4 + sizeof(cmd_end) > sizeof(buf)) {
++		chan_quectel_err = E_2BIG;
+ 		return -1;
+ 	}
+-	res = (res + 1) / 2;
+-	hexify(code_packed, res, buf + STRLEN(cmd));
+-	length += res * 2;
++	hexify((const uint8_t*)code16, res * 2, buf + STRLEN(cmd));
++	length += res * 4;
+ 
+ 	memcpy(buf + length, cmd_end, STRLEN(cmd_end)+1);
+ 	length += STRLEN(cmd_end);
+diff --git a/at_response.c b/at_response.c
+index 3c20e81..bb96a50 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -1876,24 +1876,15 @@ static int at_response_cusd (struct pvt * pvt, char * str, size_t len)
+ 	}
+ 
+ 	ast_verb (1, "[%s] USSD DCS=%d (0: gsm7, 1: ascii, 2: ucs2)\n", PVT_ID(pvt), dcs);
+-	if (dcs == 0) { // GSM-7
+-		uint16_t out_ucs2[1024];
+-		int cusd_nibbles = unhex(cusd, cusd);
+-		res = gsm7_unpack_decode(cusd, cusd_nibbles, out_ucs2, sizeof(out_ucs2) / 2, 0, 0, 0);
+-		if (res < 0) {
+-			return -1;
+-		}
+-		res = ucs2_to_utf8(out_ucs2, res, cusd_utf8_str, sizeof(cusd_utf8_str) - 1);
+-	} else if (dcs == 1) { // ASCII
+-		res = strlen(cusd);
+-		if (res > sizeof(cusd_utf8_str) - 1) {
+-			res = -1;
+-		} else {
+-			memcpy(cusd_utf8_str, cusd, res);
+-		}
+-	} else if (dcs == 2) { // UCS-2
+-		int cusd_nibbles = unhex(cusd, cusd);
+-		res = ucs2_to_utf8((const uint16_t*)cusd, (cusd_nibbles + 1) / 4, cusd_utf8_str, sizeof(cusd_utf8_str) - 1);
++	// 7-bit and UCS-2 texts both come in the TE character set, UCS-2 hex (AT+CSCS="UCS2"); 8-bit data and a string
++	// that is not UCS-2 hex are passed on as they are.
++	size_t cusd_len = strlen(cusd);
++	if (dcs != 1 && cusd_len % 4 == 0 && strspn(cusd, "0123456789ABCDEFabcdef") == cusd_len) {
++		int cusd_nibbles = unhex(cusd, (uint8_t*)cusd);
++		res = ucs2_to_utf8((const uint16_t*)cusd, cusd_nibbles / 4, cusd_utf8_str, sizeof(cusd_utf8_str) - 1);
++	} else if (cusd_len < sizeof(cusd_utf8_str)) {
++		memcpy(cusd_utf8_str, cusd, cusd_len);
++		res = cusd_len;
+ 	} else {
+ 		res = -1;
+ 	}

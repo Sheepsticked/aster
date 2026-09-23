@@ -4,8 +4,8 @@ One AtCommand patch per driver (`0001-chan-dongle-at-command-events.patch`,
 `0001-chan-quectel-at-command-events.patch`), identical in structure, applied by the Dockerfile in the drivers stage
 with `git apply` (`build-driver.sh`). `build-driver.sh` applies every `*-chan-<driver>-*.patch` it finds, in name
 order, so each driver also carries the later patches listed under "Status" below: discovery fixes, the radio setting,
-USB-sound-card audio, the Quectel receive gain, the sound-card recovery and the Quectel SMS delivery reports. None of
-them changes the AtCommand contract.
+USB-sound-card audio, the Quectel receive gain, the sound-card recovery, the Quectel SMS delivery reports and the
+Quectel USSD character set. None of them changes the AtCommand contract.
 
 Each patch is a `git format-patch` export whose commit message names the upstream commit it applies to (`Upstream:`)
 and what it is for (`Purpose:`). This file is the protocol contract the controller's `at` module is written against.
@@ -153,6 +153,7 @@ Every patch below is applied in the image.
 | `0008-chan-quectel-sms-report-cds.patch` | @ `3d45c7f`, after 0007 | Upstream pull request [#75](https://github.com/IchthysMaranatha/asterisk-chan-quectel/pull/75) by vskiwi (head `e810ed6`), whole. An EC25 keeps an SMS status report in its separate `"SR"` storage while upstream reads it with `AT+CMGR` from `"SM"`, so every delivery report was lost and each sent SMS ended with the driver's own expiry (type 2). The initialization now sends `AT+CNMI=2,1,0,1,0`: the modem passes each report at once as `+CDS: <length>` plus the PDU, which goes through the same smsdb matching, `report` extension and `QuectelReport` event as before. New shared setting `smsreport = cds | cdsi` (default `cds`); a modem that refuses `<ds>=1` falls back to the old `+CDSI` path with a warning. Aster adds `+CDS` to 0001's unsolicited results, so a report arriving during an AtCommand is not returned as its output. |
 | `0009-chan-quectel-user-command-deadline.patch` | @ `3d45c7f`, after 0008 | An AtCommand is written by the AMI thread while the monitor thread already sits in its 10 s idle wait, so the command timed out when that wait ended (after 0–10 s) and the modem was restarted, whatever `Timeout` it had. A written head command whose own deadline is still ahead is now waited for. |
 | `0010-chan-dongle-user-command-deadline.patch` | wdoekes/asterisk-chan-dongle @ `31eb619`, after 0002 | The same fix for chan_dongle. |
+| `0011-chan-quectel-ussd-ucs2.patch` | @ `3d45c7f`, after 0009 | USSD in the character set the initialization selects (`AT+CSCS="UCS2"`), in which a Quectel modem takes the `AT+CUSD` string and gives the `+CUSD` text as UCS-2 hex (3GPP TS 27.007). Upstream sent the code as packed GSM 7-bit hex, the convention of Huawei sticks, which the modem refuses with `ERROR`, and unpacked 7-bit answers the same way. The code now goes as UCS-2 hex with DCS 15, and an answer that is UCS-2 hex is decoded as such whatever its DCS; 8-bit data and any other string are passed on as they are. |
 
 Line endings: 12 of the 25 chan_quectel files the series touches (`at_command.[ch]`, `at_parse.c`, `at_response.[ch]`,
 `chan_quectel.[ch]`, `dc_config.[ch]`, `manager.c`, `pdiscovery.c`, `quectel.conf`) are committed upstream with CRLF
