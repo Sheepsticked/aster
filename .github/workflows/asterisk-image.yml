@@ -150,6 +150,8 @@ jobs:
           APPLY_HOME: ${{ runner.temp }}/apply-home
         run: |
           mkdir -p "$APPLY_HOME/config" "$APPLY_HOME/logs/asterisk" "$APPLY_HOME/state"
+          # Asterisk writes the log as its own user, and the tests, which run as the runner's user, prune in it.
+          chmod 777 "$APPLY_HOME/logs/asterisk"
           cp -r docker/asterisk/test-config "$APPLY_HOME/config/asterisk"
           docker run -d --name apply --platform "$PLATFORM" -p 127.0.0.1:5039:5038 \
             --mount "type=bind,source=$APPLY_HOME/config/asterisk,target=/etc/asterisk" \
