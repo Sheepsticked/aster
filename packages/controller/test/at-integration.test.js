@@ -120,4 +120,12 @@ describe('at integration', { skip: !enabled && 'set ASTER_AMI_TEST=1 and ASTER_A
     assert.equal(op.error, 'QuectelSendUSSD gsm_test: [gsm_test] Device disconnected');
     assert.deepEqual(sent.find((s) => s.name === 'QuectelSendUSSD')?.headers, { Device: 'gsm_test', USSD: '*100#' });
   });
+
+  test('a USSD cancel on the stopped device → AtCommand refused → failed', async () => {
+    const op = await run('ussd-cancel', 'gsm_test', {});
+    assert.equal(op.status, 'failed');
+    assert.equal(op.error, 'AT+CUSD=2: Device not connected');
+    const request = sent.find((s) => s.name === 'QuectelAtCommand' && s.headers.Command === 'AT+CUSD=2');
+    assert.deepEqual(request?.headers, { Device: 'gsm_test', Command: 'AT+CUSD=2', ActionID: `ussd-cancel-${op.id}`, Timeout: '15' });
+  });
 });

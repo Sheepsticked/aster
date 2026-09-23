@@ -415,6 +415,33 @@ test.describe('the modem page', () => {
     await expect(at.getByText('+CSQ: 21,99')).toBeVisible({ timeout: 15_000 });
   });
 
+  test('walks a USSD menu: a menu says the operator waits and offers Cancel; the final answer and Cancel end it', async ({ page }, info) => {
+    await page.goto('/modems/gsm1');
+    const box = await openSection(page, 'modem-ussd');
+    const code = box.getByLabel(ru['ussd.code']);
+    const send = box.getByRole('button', { name: ru['ussd.send'] });
+    await code.fill('*111#');
+    await send.click();
+    await expect(box.getByText(ru['ussd.waiting'])).toBeVisible({ timeout: 15_000 });
+    await expect(code).toHaveValue('');
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-ussd-menu.png`, fullPage: true });
+    await code.fill('1');
+    await send.click();
+    await expect(box.getByText('Ваш баланс 12.34 EUR', { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(box.getByText(ru['ussd.waiting'])).toHaveCount(0);
+    await expect(box.getByRole('button', { name: ru['ussd.cancel'] })).toHaveCount(0);
+
+    await code.fill('*111#');
+    await send.click();
+    await box.getByRole('button', { name: ru['ussd.cancel'] }).click();
+    await expect(box.getByText(ru['ussd.cancelled'])).toBeVisible({ timeout: 15_000 });
+    await expect(box.getByText(ru['ussd.waiting'])).toHaveCount(0);
+    // A code after Cancel is a new request again, not an answer to the menu.
+    await code.fill('2');
+    await send.click();
+    await expect(box.getByText('Ваш баланс 12.34 EUR. Запрос 2', { exact: true })).toBeVisible({ timeout: 15_000 });
+  });
+
   test('restarts, disables and enables the modem from the buttons at the top', async ({ page }) => {
     await page.goto('/modems/gsm1');
     const quick = page.getByRole('group', { name: ru['modem.quick_actions'] });

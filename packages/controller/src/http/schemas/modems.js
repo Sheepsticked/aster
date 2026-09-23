@@ -104,6 +104,12 @@ export const ussd = ({
   },
 });
 
+/** POST /api/modems/:id/ussd/cancel takes no parameters. */
+export const ussdCancel = ({
+  params: idParam,
+  body: { type: 'object', additionalProperties: false, properties: {} },
+});
+
 /** GET /api/modems — the list takes no filters; `q` and paging belong to the history routes. */
 export const list = ({ querystring: { type: 'object', additionalProperties: false, properties: {} } });
 

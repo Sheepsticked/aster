@@ -84,9 +84,17 @@
 
   let ussdCode = $state('');
   let ussdBusy = $state(false);
+  let ussdCancelling = $state(false);
   let ussdResult = $state(/** @type {any} */ (null));
   /** @type {string | null} */
   let ussdProblem = $state(null);
+  /** @type {string | null} */
+  let ussdNote = $state(null);
+  /** The operator keeps the session open for an answer (the `type` of at/ussd.js). */
+  const ussdWaiting = $derived(ussdResult?.type === 1);
+  /** What the answer's session state means, when there is something to say about it. */
+  const ussdSession = $derived(({ 1: t('ussd.waiting'), 2: t('ussd.closed_by_network'), 4: t('ussd.not_supported'),
+    5: t('ussd.network_timeout') })[ussdResult?.type] ?? null);
 
   /** @param {any} entry  a modem as `modemView` sends it */
   function editable(entry) {
@@ -350,6 +358,7 @@
     event.preventDefault();
     if (ussdBusy) return;
     ussdProblem = null;
+    ussdNote = null;
     ussdResult = null;
     const code = ussdCode.trim();
     if (!USSD_CODE.test(code)) {
@@ -361,8 +370,31 @@
       const run = await runOperation(() => api.ussd(id, { code }));
       ussdResult = run.result;
       ussdProblem = run.status === 'done' ? null : (run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain')));
+      // A menu is answered with an option number, so the field is emptied for it.
+      if (run.status === 'done' && run.result?.type === 1) ussdCode = '';
     } finally {
       ussdBusy = false;
+    }
+  }
+
+  /** Ends the session the operator keeps open for an answer. */
+  async function cancelUssd() {
+    if (ussdBusy) return;
+    ussdProblem = null;
+    ussdNote = null;
+    ussdBusy = true;
+    ussdCancelling = true;
+    try {
+      const run = await runOperation(() => api.ussdCancel(id));
+      if (run.status === 'done') {
+        ussdResult = null;
+        ussdNote = t('ussd.cancelled');
+      } else {
+        ussdProblem = run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain'));
+      }
+    } finally {
+      ussdBusy = false;
+      ussdCancelling = false;
     }
   }
 
@@ -716,7 +748,7 @@
         <form class="flex flex-col gap-3" onsubmit={sendUssd} novalidate>
           <Field id="ussd-code" label={t('ussd.code')}>
             {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
-              <input id="ussd-code" class="input tabular-nums" bind:value={ussdCode} inputmode="tel" autocomplete="off" placeholder="*100#" aria-describedby={field.describedBy} />
+              <input id="ussd-code" class="input tabular-nums" bind:value={ussdCode} inputmode="tel" autocomplete="off" placeholder={ussdWaiting ? '1' : '*100#'} aria-describedby={field.describedBy} />
             {/snippet}
           </Field>
           {#if ussdProblem !== null}
@@ -726,11 +758,24 @@
             <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
               <p class="font-medium">{t('ussd.answer')}</p>
               <p class="mt-1 break-words whitespace-pre-wrap">{ussdResult.text ?? t('common.none')}</p>
+              {#if ussdSession !== null}
+                <p class="mt-2 text-slate-600">{ussdSession}</p>
+              {/if}
             </div>
           {/if}
-          <button type="submit" class="btn btn-primary w-full sm:w-auto sm:self-start" disabled={ussdBusy}>
-            {ussdBusy ? t('common.working') : t('ussd.send')}
-          </button>
+          {#if ussdNote !== null}
+            <p class="text-sm text-slate-600" role="status">{ussdNote}</p>
+          {/if}
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <button type="submit" class="btn btn-primary w-full sm:w-auto" disabled={ussdBusy}>
+              {ussdBusy && !ussdCancelling ? t('common.working') : t('ussd.send')}
+            </button>
+            {#if ussdWaiting}
+              <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={ussdBusy} onclick={cancelUssd}>
+                {ussdCancelling ? t('common.working') : t('ussd.cancel')}
+              </button>
+            {/if}
+          </div>
         </form>
       </Section>
 

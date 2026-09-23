@@ -58,7 +58,7 @@ it decided — the port, and which images the appliance runs — it writes to `.
   retry, and delete one SMS or the whole list (calls too).
 - **Missed-call alerts.** A Telegram message with the caller's number and the time.
 - **Modem control.** Start, stop, reset, check signal. Call forwarding (always, or when busy, unanswered or unreachable)
-  and USSD codes (balance, top-ups) without a terminal. A raw AT console when you need one.
+  and USSD codes and menus (balance, top-ups) without a terminal. A raw AT console when you need one.
 - **Hot-plug that works.** Modems are matched by IMEI, so unplugging one or rebooting does not shuffle your lines.
 - **Config editor.** The Asterisk files stay editable in the browser, checked before they apply, with one click to
   undo a change Asterisk rejected.

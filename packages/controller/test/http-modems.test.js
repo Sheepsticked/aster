@@ -289,6 +289,14 @@ describe('http modem routes', () => {
       assert.deepEqual(h.opsOf('ussd')[0]?.params, { code: '*100#' });
       assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/ussd', headers: { cookie }, payload: { code: 'AT+CSQ' } })).statusCode, 400);
       assert.equal(h.opsOf('ussd').length, 1);
+
+      const cancel = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/ussd/cancel', headers: { cookie }, payload: {} });
+      assert.equal(cancel.statusCode, 202);
+      assert.equal(cancel.json().operation.kind, 'ussd-cancel');
+      assert.deepEqual(h.opsOf('ussd-cancel')[0]?.params, {});
+      assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/ussd/cancel', headers: { cookie }, payload: { code: '1' } })).statusCode, 400);
+      assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm9/ussd/cancel', headers: { cookie }, payload: {} })).statusCode, 404);
+      assert.equal(h.opsOf('ussd-cancel').length, 1);
     } finally {
       await h.stop();
     }

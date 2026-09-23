@@ -1,10 +1,10 @@
 // @ts-check
-// Aster controller — the `ussd` operation: `…SendUSSD`, then the first `…NewUSSD` event of the device within the answer timeout.
-// A driver refusal fails it; no answer, a disconnect or an AMI drop leaves it uncertain.
+// Aster controller — `ussd`: `…SendUSSD`, then the device's first `…NewUSSD` in time, with the session state of the `…NewCUSD`
+// just before it; `ussd-cancel` ends an open session (AT+CUSD=2). A driver refusal fails either; no verdict leaves it uncertain.
 // Usage: createUssdOps({ registry }).register(runner); runner.enqueue({ kind: 'ussd', modemId: 'gsm1', params: { code: '*100#' }, actor: 'admin' })
 import { AmiError } from '../ami/client.js';
 import { OperationError } from '../ops/runner.js';
-import { errorText, modemDriver, prefix, requireAmi } from './client.js';
+import { errorText, modemDriver, prefix, requireAmi, transact } from './client.js';
 
 /** @typedef {import('../ami/client.js').AmiClient} AmiClient */
 /** @typedef {import('../ami/parser.js').Packet} Packet */
@@ -21,6 +21,8 @@ import { errorText, modemDriver, prefix, requireAmi } from './client.js';
  */
 
 export const KIND = 'ussd';
+export const CANCEL_KIND = 'ussd-cancel';
+export const CANCEL_COMMAND = 'AT+CUSD=2';
 export const CODE = /^[0-9*#]{1,64}$/;
 /** @type {Readonly<{ answerTimeoutMs: number, actionTimeoutMs: number }>} */
 export const DEFAULTS = Object.freeze({ answerTimeoutMs: 30_000, actionTimeoutMs: 30_000 });
@@ -50,6 +52,16 @@ export function ussdText(packet) {
 }
 
 /**
+ * The session state of a `…NewCUSD` event's raw `+CUSD: <m>[,<str>,<dcs>]` line, or null for anything else.
+ * @param {unknown} message
+ * @returns {number | null}
+ */
+export function cusdType(message) {
+  const match = /^\+CUSD:\s*([0-5])(?:,|$)/.exec(String(message ?? '').trim());
+  return match ? Number(match[1]) : null;
+}
+
+/**
  * @param {Options} options
  */
 export function createUssdOps({ registry, log = SILENT, now = Date.now, timing = {} }) {
@@ -67,31 +79,40 @@ export function createUssdOps({ registry, log = SILENT, now = Date.now, timing =
     const driver = modemDriver(registry, modemId, params);
     const ami = requireAmi(ctx, 'the USSD was not sent');
     const p = prefix(driver);
-    const names = { ussd: `event:${p}NewUSSD`, status: `event:${p}Status` };
+    const names = { ussd: `event:${p}NewUSSD`, cusd: `event:${p}NewCUSD`, status: `event:${p}Status` };
     const sentAt = now();
-    /** @type {{ modem_id: string, driver: string, code: string, reply: string | null, text: string | null, lines: string[], sent_at: number }} */
-    const result = { modem_id: modemId, driver, code, reply: null, text: null, lines: [], sent_at: sentAt };
+    /** type: the +CUSD session state of the answer (3GPP TS 27.007): 0 done, 1 the network waits for an answer, 2 ended by
+     * the network, 3 answered by another client, 4 not supported, 5 network timeout; null when the driver did not report it
+     * @type {{ modem_id: string, driver: string, code: string, reply: string | null, type: number | null, text: string | null, lines: string[], sent_at: number }} */
+    const result = { modem_id: modemId, driver, code, reply: null, type: null, text: null, lines: [], sent_at: sentAt };
     /** @param {Record<string, unknown>} [extra] */
     const uncertain = (/** @type {string} */ message, extra) => new OperationError(message, { status: 'uncertain', result: { ...result, ...extra, observed_at: now() } });
-    /** @type {Promise<{ lines: string[], text: string } | Error>} */
+    /** @type {Promise<{ lines: string[], text: string, type: number | null } | Error>} */
     const answer = new Promise((resolve) => {
       /** @type {NodeJS.Timeout | null} */
       let timer = null;
       let settled = false;
-      /** @param {{ lines: string[], text: string } | Error} value */
+      /** the session state of the device's latest `…NewCUSD` @type {number | null} */
+      let type = null;
+      /** @param {{ lines: string[], text: string, type: number | null } | Error} value */
       const finish = (value) => {
         if (settled) return;
         settled = true;
         if (timer) clearTimeout(timer);
         ami.off(names.ussd, onUssd);
+        ami.off(names.cusd, onCusd);
         ami.off(names.status, onStatus);
         ami.off('down', onDown);
         resolve(value);
       };
       /** @param {Packet} packet */
+      const onCusd = (packet) => {
+        if (first(packet.get('Device')) === modemId) type = cusdType(first(packet.get('Message')));
+      };
+      /** @param {Packet} packet */
       const onUssd = (packet) => {
         if (first(packet.get('Device')) !== modemId) return;
-        finish(ussdText(packet));
+        finish({ ...ussdText(packet), type });
       };
       /** @param {Packet} packet */
       const onStatus = (packet) => {
@@ -100,6 +121,7 @@ export function createUssdOps({ registry, log = SILENT, now = Date.now, timing =
       /** @param {unknown} err */
       const onDown = (err) => finish(new Error(`the AMI connection dropped before the network answered: ${errorText(err)}`));
       ami.on(names.ussd, onUssd);
+      ami.on(names.cusd, onCusd);
       ami.on(names.status, onStatus);
       ami.on('down', onDown);
       timer = setTimeout(() => finish(new Error(`no USSD answer within ${t.answerTimeoutMs >= 1000 ? `${Math.round(t.answerTimeoutMs / 1000)} s` : `${t.answerTimeoutMs} ms`}`)), t.answerTimeoutMs);
@@ -116,17 +138,41 @@ export function createUssdOps({ registry, log = SILENT, now = Date.now, timing =
     const outcome = await answer;
     if (outcome instanceof OperationError) throw new OperationError(outcome.message, { status: outcome.status, result: { ...result, observed_at: now() } });
     if (outcome instanceof Error) throw uncertain(`${code}: ${outcome.message}; whether the network received the code is unknown`);
+    result.type = outcome.type;
     result.lines = outcome.lines;
     result.text = outcome.text;
-    log.info('USSD answered', { modem: modemId, code, lines: outcome.lines.length });
+    log.info('USSD answered', { modem: modemId, code, type: outcome.type, lines: outcome.lines.length });
     return { ...result, observed_at: now() };
+  }
+
+  /**
+   * The `ussd-cancel` operation: AT+CUSD=2 through the AtCommand action; the modem's OK ends it done.
+   * @param {Context} ctx
+   */
+  async function cancelHandler(ctx) {
+    const modemId = ctx.op.modemId;
+    if (modemId === null) throw new OperationError('ussd-cancel needs the modem id');
+    const driver = modemDriver(registry, modemId, ctx.op.params ?? {});
+    const ami = requireAmi(ctx, 'the session was not ended');
+    ctx.progress(`${prefix(driver)}AtCommand ${CANCEL_COMMAND}`);
+    const tx = await transact(ami, { driver, device: modemId, command: CANCEL_COMMAND, actionId: `ussd-cancel-${ctx.op.id}`, actionTimeoutMs: t.actionTimeoutMs, log: ctx.log, now });
+    const result = { modem_id: modemId, driver, ...tx, observed_at: now() };
+    if (tx.outcome === 'OK') {
+      log.info('USSD session ended', { modem: modemId });
+      return result;
+    }
+    if (tx.outcome === 'TIMEOUT') throw new OperationError(`${CANCEL_COMMAND}: no final line within ${tx.timeout_s} s; the driver restarts the modem after an AT timeout`, { status: 'failed', result });
+    if (tx.outcome === 'ERROR' || tx.outcome === 'refused') throw new OperationError(`${CANCEL_COMMAND}: ${tx.error}`, { status: 'failed', result });
+    throw new OperationError(`${CANCEL_COMMAND}: ${tx.error}; whether the modem ran it is unknown`, { status: 'uncertain', result });
   }
 
   return {
     handler,
-    /** Registers the kind on the modem's queue (an interrupted one is uncertain at the next start). @param {Runner} runner */
+    cancelHandler,
+    /** Registers both kinds on the modem's queue (an interrupted one is uncertain at the next start). @param {Runner} runner */
     register(runner) {
       runner.register(KIND, handler);
+      runner.register(CANCEL_KIND, cancelHandler);
     },
   };
 }

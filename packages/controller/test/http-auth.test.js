@@ -164,7 +164,7 @@ describe('http auth routes', () => {
         ['DELETE', '/api/modems/gsm1'], ['POST', '/api/modems/gsm1/start'], ['POST', '/api/modems/gsm1/stop'],
         ['POST', '/api/modems/gsm1/restart'], ['POST', '/api/modems/gsm1/reset'], ['POST', '/api/modems/gsm1/remap'],
         ['GET', '/api/modems/gsm1/forwarding'], ['POST', '/api/modems/gsm1/forwarding'], ['POST', '/api/modems/gsm1/at'],
-        ['POST', '/api/modems/gsm1/ussd'], ['GET', '/api/phones'], ['POST', '/api/phones'], ['GET', '/api/phones/596'],
+        ['POST', '/api/modems/gsm1/ussd'], ['POST', '/api/modems/gsm1/ussd/cancel'], ['GET', '/api/phones'], ['POST', '/api/phones'], ['GET', '/api/phones/596'],
         ['PUT', '/api/phones/596'], ['DELETE', '/api/phones/596'], ['POST', '/api/scan'], ['GET', '/api/scan/latest'],
         ['GET', '/api/messages'], ['POST', '/api/sms'], ['GET', '/api/sms/1'], ['POST', '/api/sms/1/retry'], ['DELETE', '/api/sms/1'], ['POST', '/api/sms/purge'], ['GET', '/api/calls'],
         ['GET', '/api/notifications'], ['POST', '/api/notify/test'], ['GET', '/api/config/files'],

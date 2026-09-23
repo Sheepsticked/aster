@@ -123,6 +123,7 @@ export const api = {
   at: (id, body) => post(`/modems/${seg(id)}/at`, body),
   /** @param {string} id @param {{ code: string }} body */
   ussd: (id, body) => post(`/modems/${seg(id)}/ussd`, body),
+  ussdCancel: (id) => post(`/modems/${seg(id)}/ussd/cancel`),
 
   phones: () => get('/phones'),
   /** @param {Record<string, unknown>} fields */

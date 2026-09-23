@@ -65,7 +65,8 @@ export class FakeDriverAmi extends EventEmitter {
     this.at = () => undefined;
     /** every accepted SendUSSD @type {Array<{ device: string, code: string }>} */
     this.ussd = [];
-    /** what the network answers a code with (null: nothing) @type {(device: string, code: string) => string | null} */
+    /** what the network answers a code with (null: nothing; with a type, a `…NewCUSD` of that session state comes first)
+     * @type {(device: string, code: string) => string | { text: string, type: number } | null} */
     this.ussdAnswer = () => null;
     /** @type {Map<string, FakeDevice>} */
     this.devices = new Map();
@@ -173,12 +174,19 @@ export class FakeDriverAmi extends EventEmitter {
   }
 
   /**
-   * A `…NewUSSD` event (manager_event_new_ussd: Device, LineCount, MessageLine<n> for every non-empty line).
+   * A `…NewUSSD` event (manager_event_new_ussd: Device, LineCount, MessageLine<n> for every non-empty line); with a type,
+   * the `…NewCUSD` the driver sends before it (Device, Message: the raw `+CUSD: <type>,…` line).
    * @param {string} name
    * @param {string} text
+   * @param {number} [type]
    */
-  emitUssd(name, text) {
+  emitUssd(name, text, type) {
     const p = prefix(this.devices.get(name)?.driver ?? 'quectel');
+    if (type !== undefined) {
+      const raw = packet([['Event', `${p}NewCUSD`], ['Privilege', 'call,all'], ['Device', name], ['Message', `+CUSD: ${type},"${text.replace(/\r/g, '\\r').replace(/\n/g, '\\n')}",15`]]);
+      this.emit('event', raw);
+      this.emit(`event:${p}NewCUSD`, raw);
+    }
     const lines = text.split(/\r?\n/).filter((line) => line !== '');
     const event = packet([['Event', `${p}NewUSSD`], ['Privilege', 'call,all'], ['Device', name], ['LineCount', String(lines.length)], ...lines.map((line, i) => /** @type {[string, string]} */ ([`MessageLine${i}`, line]))]);
     this.emit('event', event);
@@ -378,7 +386,8 @@ export class FakeDriverAmi extends EventEmitter {
       if (!device || device.driver !== (ussd[1] === 'Quectel' ? 'quectel' : 'dongle') || !CONNECTED.has(device.state) || device.state === 'Radio off') throw error(`[${deviceName}] Device disconnected`);
       this.ussd.push({ device: deviceName, code });
       const answer = this.ussdAnswer(deviceName, code);
-      if (answer !== null) setTimeout(() => this.emitUssd(deviceName, answer), 0);
+      if (typeof answer === 'string') setTimeout(() => this.emitUssd(deviceName, answer), 0);
+      else if (answer !== null) setTimeout(() => this.emitUssd(deviceName, answer.text, answer.type), 0);
       return ok(`[${deviceName}] USSD queued for send`);
     }
     const match = /^(Quectel|Dongle)(Start|Stop|Restart|Reset|Remove|Reload)$/.exec(name);

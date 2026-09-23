@@ -4,8 +4,8 @@
 import { TIMED } from '../../at/forwarding.js';
 import { assignWithStarterPhones } from '../../config/starter.js';
 import { start as startOp, applyRegistry, loadForChange } from '../ops.js';
-import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, update, ussd as ussdSchema }
-  from '../schemas/modems.js';
+import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, update, ussd as ussdSchema,
+  ussdCancel as ussdCancelSchema } from '../schemas/modems.js';
 
 /** The device actions and the operation kind each one enqueues; `modem-remove` is reconcile's, not the API's. */
 export const ACTIONS = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
@@ -215,6 +215,16 @@ export function modemRoutes(app, ctx) {
     if (!found) return reply;
     const operation = startOp(ctx, { kind: 'ussd', modemId: id, params: { code: body.code }, actor: 'admin' });
     ctx.log.info('USSD queued', { modem: id, code: body.code, operation: operation.id });
+    return reply.code(202).send({ operation });
+  });
+
+  // Ends a USSD session the network keeps open for an answer (a menu).
+  app.post('/api/modems/:id/ussd/cancel', { schema: ussdCancelSchema }, async (request, reply) => {
+    const id = /** @type {any} */ (request.params).id;
+    const found = find(id, reply);
+    if (!found) return reply;
+    const operation = startOp(ctx, { kind: 'ussd-cancel', modemId: id, params: {}, actor: 'admin' });
+    ctx.log.info('USSD cancel queued', { modem: id, operation: operation.id });
     return reply.code(202).send({ operation });
   });
 }

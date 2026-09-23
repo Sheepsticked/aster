@@ -200,6 +200,12 @@
   "ussd.code_invalid": "A USSD code holds digits, * and #, up to 64 characters.",
   "ussd.answer": "The operator answered",
   "ussd.send": "Send",
+  "ussd.waiting": "The operator is waiting for your answer: enter the number of an option and press Send. A menu left unanswered closes after a while.",
+  "ussd.cancel": "Cancel",
+  "ussd.cancelled": "The session is ended.",
+  "ussd.closed_by_network": "The operator ended the session.",
+  "ussd.not_supported": "The network does not support this request.",
+  "ussd.network_timeout": "The network did not answer in time.",
 
   "at.title": "AT command",
   "at.hint": "The command goes straight to the modem. Wrong commands can stop it working until it is restarted.",
@@ -510,6 +516,7 @@
   "op.at": "AT command",
   "op.forwarding": "Call forwarding",
   "op.ussd": "USSD request",
+  "op.ussd-cancel": "USSD cancel",
 
   "op.still_running": "It is still running — Activity shows how it ends",
   "op.uncertain": "The outcome is unknown",

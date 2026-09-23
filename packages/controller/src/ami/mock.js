@@ -35,6 +35,9 @@ const prefix = (driver) => (driver === 'quectel' ? 'Quectel' : 'Dongle');
 /** The CR/LF escaping the AtCommand patch uses for a Line or an Error header (docker/asterisk/patches/README.md). */
 const escape = (/** @type {string} */ text) => text.replaceAll('\r', '\\r').replaceAll('\n', '\\n');
 
+/** The code that opens the stand-in network's USSD menu. */
+export const USSD_MENU = '*111#';
+
 /**
  * One device as `…ShowDevices` reports it, with the values devices/state.js `parseDeviceEntry` reads filled in.
  * @param {{ name: string, driver: 'quectel' | 'dongle', started: boolean, radio: string, imei: string, imsi: string, data: string, audio: string }} device
@@ -141,6 +144,26 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
   /** What a modem remembers per `<device>:<reason>` between an `AT+CCFC` mutation and the queries that follow it (at/forwarding.js). */
   /** @type {Map<string, { enabled: boolean, number: string | null, time: string | null }>} */
   const forwarding = new Map();
+  /** The devices whose USSD menu waits for an answer; an answer or AT+CUSD=2 closes it. */
+  const menus = new Set();
+
+  /**
+   * What the stand-in network answers a USSD code with: USSD_MENU opens a menu (session state 1) whose options answer
+   * and close it; any other code gets a balance that ends the session (0).
+   * @param {string} name @param {string} code
+   */
+  const ussdAnswer = (name, code) => {
+    if (menus.delete(name)) {
+      if (code === '1') return { type: 0, text: 'Balance 12.34 EUR' };
+      if (code === '2') return { type: 0, text: `Your number ${RUNNING.number}` };
+      return { type: 0, text: `There is no option ${code}` };
+    }
+    if (code === USSD_MENU) {
+      menus.add(name);
+      return { type: 1, text: 'Menu\n1. Balance\n2. My number' };
+    }
+    return { type: 0, text: `Balance 12.34 EUR. Request ${code}` };
+  };
 
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -335,8 +358,15 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
           return;
         }
         ok(actionId, `[${name}] USSD queued for send`);
-        const text = `Balance 12.34 EUR. Request ${packet.get('USSD') ?? ''}`;
-        setTimeout(() => send([['Event', `${p}NewUSSD`], ['Privilege', 'call,all'], ['Device', name], ['LineCount', '1'], ['MessageLine0', text]]), 50);
+        const { type, text } = ussdAnswer(name, packet.get('USSD') ?? '');
+        const lines = text.split('\n');
+        // The raw line first, as the drivers send it: the text in UCS-2 hex, the way a modem in AT+CSCS="UCS2" writes it.
+        const hex = Buffer.from(text, 'utf16le').swap16().toString('hex').toUpperCase();
+        setTimeout(() => {
+          send([['Event', `${p}NewCUSD`], ['Privilege', 'call,all'], ['Device', name], ['Message', `+CUSD: ${type},"${hex}",72`]]);
+          send([['Event', `${p}NewUSSD`], ['Privilege', 'call,all'], ['Device', name], ['LineCount', String(lines.length)],
+            ...lines.map((line, i) => /** @type {[string, string]} */ ([`MessageLine${i}`, line]))]);
+        }, 50);
         return;
       }
       if (verb === 'AtCommand') return atCommand(actionId, driver, device, packet);
@@ -372,6 +402,7 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
       /** @type {string[]} */
       let lines = [];
       if (upper.startsWith('AT+CSQ')) lines = ['+CSQ: 21,99'];
+      else if (upper === 'AT+CUSD=2') menus.delete(device.name);
       else if (upper.startsWith('AT+CIMI')) lines = [device.imsi];
       else if (upper.startsWith('AT+CCFC=')) {
         // A mutation changes what later queries answer, as on a modem: reason 4 covers 0–3, reason 5 covers 1–3.

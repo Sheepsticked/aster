@@ -44,6 +44,8 @@ const state = {
     },
     gsm2: null,
   }),
+  /** the modems whose USSD menu waits for an answer @type {Set<string>} */
+  ussdMenus: new Set(),
   operations: new Map(),
   messages: fixtures.messages(),
   calls: fixtures.calls(),
@@ -336,7 +338,7 @@ async function answer(method, path, body, query = new URLSearchParams()) {
     if (method === 'GET') return json({ modems: state.modems.map(withForwarding), registry: { present: true, hash: state.settings.registry.hash } });
     if (method === 'POST') return modemPost(body);
   }
-  const modemPath = /^\/api\/modems\/([^/]+)(?:\/([a-z]+))?$/.exec(path);
+  const modemPath = /^\/api\/modems\/([^/]+)(?:\/([a-z]+(?:\/cancel)?))?$/.exec(path);
   if (modemPath) return modemRoute(method, decodeURIComponent(modemPath[1]), modemPath[2] ?? null, body);
 
   if (path === '/api/connections' && method === 'GET') return json({ available: true, error: null, phones: fixtures.connections() });
@@ -573,10 +575,19 @@ function modemRoute(method, id, verb, body) {
   }
   if (verb === 'ussd') {
     const connected = modem.state !== 'flapping';
-    const text = `Ваш баланс 12.34 EUR. Запрос ${String(body?.code ?? '')}`;
+    const code = String(body?.code ?? '');
+    // *111# opens a menu (session state 1) that an option number answers; anything else is a final answer (0).
+    const menu = state.ussdMenus.delete(id);
+    const [type, text] = menu ? [0, code === '1' ? 'Ваш баланс 12.34 EUR' : code === '2' ? 'Ваш номер +1234567890' : `Пункта ${code} нет`]
+      : code === '*111#' ? [1, 'Меню\n1. Баланс\n2. Мой номер'] : [0, `Ваш баланс 12.34 EUR. Запрос ${code}`];
+    if (connected && type === 1) state.ussdMenus.add(id);
     return json({ operation: operation('ussd', id, connected
-      ? { result: { modem_id: id, driver: modem.driver, code: body?.code ?? '', reply: `[${id}] USSD queued for send`, text, lines: [text], sent_at: Date.now(), observed_at: Date.now() } }
+      ? { result: { modem_id: id, driver: modem.driver, code, reply: `[${id}] USSD queued for send`, type, text, lines: text.split('\n'), sent_at: Date.now(), observed_at: Date.now() } }
       : { status: 'uncertain', result: null, error: `[${id}] Device disconnected` }) }, 202);
+  }
+  if (verb === 'ussd/cancel') {
+    state.ussdMenus.delete(id);
+    return json({ operation: operation('ussd-cancel', id, { result: { modem_id: id, driver: modem.driver, command: 'AT+CUSD=2', outcome: 'OK', lines: [] } }) }, 202);
   }
   if (['start', 'stop', 'restart', 'reset', 'remap'].includes(String(verb))) {
     const kind = verb === 'remap' ? 'remap' : `modem-${verb}`;

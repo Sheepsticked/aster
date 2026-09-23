@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import { AmiClient, AmiError } from '../src/ami/client.js';
-import { BANNER, CREDENTIALS, startMockAmi } from '../src/ami/mock.js';
+import { BANNER, CREDENTIALS, USSD_MENU, startMockAmi } from '../src/ami/mock.js';
 import { parseDiscovery } from '../src/devices/scan.js';
 import { parseDeviceEntry, showDevices } from '../src/devices/state.js';
 import { REQUIRED_MODULES, runningModules } from '../src/http/routes/health.js';
@@ -221,6 +221,27 @@ describe('ami mock', () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     assert.equal(ussd.length, 1);
     assert.match(String(ussd.at(0)?.get('MessageLine0')), /\*100#/);
+  });
+
+  test('opens a USSD menu: the raw NewCUSD comes first, and an answer or AT+CUSD=2 closes the menu', async () => {
+    const { ami } = await connected();
+    /** @type {string[]} */
+    const seen = [];
+    ami.on('event:QuectelNewCUSD', (packet) => seen.push(`cusd ${String(packet.get('Message')).slice(0, 8)}`));
+    ami.on('event:QuectelNewUSSD', (packet) => seen.push(`ussd ${packet.get('LineCount')} ${packet.get('MessageLine0')}`));
+    /** @param {string} code */
+    const ussd = async (code) => {
+      await ami.action('QuectelSendUSSD', { Device: 'gsm1', USSD: code });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    };
+    await ussd(USSD_MENU);
+    await ussd('1');
+    await ussd(USSD_MENU);
+    const ack = await ami.action('QuectelAtCommand', { Device: 'gsm1', Command: 'AT+CUSD=2', ActionID: 'at-1', Timeout: '15' });
+    assert.equal(ack.get('Message'), '[gsm1] AT command queued');
+    await ussd('1');
+    assert.deepEqual(seen, ['cusd +CUSD: 1', 'ussd 3 Menu', 'cusd +CUSD: 0', 'ussd 1 Balance 12.34 EUR',
+      'cusd +CUSD: 1', 'ussd 3 Menu', 'cusd +CUSD: 0', 'ussd 1 Balance 12.34 EUR. Request 1']);
   });
 
   test('prints a discovery list the scanner can parse, and nothing once that device is a modem', async () => {
