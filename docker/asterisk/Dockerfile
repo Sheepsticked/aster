@@ -96,8 +96,15 @@ ENTRYPOINT ["asterisk", "-f", "-U", "root", "-G", "root", "-C", "/etc/asterisk/a
 FROM asterisk-dongle-quectel AS aster
 ARG ASTERISK_VERSION
 COPY rootfs/ /
-RUN mkdir -p /var/spool/aster/events \
- && chmod 755 /usr/local/bin/aster-emit
+# Asterisk drops to this user, which needs dialout and audio for the modems' ports and sound cards; aster-start gives
+# it the mounted directories it writes. The uid is fixed because those directories live on the host.
+RUN groupadd --gid 5060 asterisk \
+ && useradd --uid 5060 --gid asterisk --groups dialout,audio --no-create-home --home-dir /var/lib/asterisk \
+      --shell /usr/sbin/nologin asterisk \
+ && mkdir -p /var/spool/aster/events \
+ && chmod 755 /usr/local/bin/aster-emit /usr/local/bin/aster-start \
+ && chown -R asterisk:asterisk /var/spool/aster /var/spool/asterisk /var/run/asterisk
+ENTRYPOINT ["/usr/local/bin/aster-start"]
 LABEL org.opencontainers.image.title="aster/aster-asterisk" \
       org.opencontainers.image.description="Aster GSM gateway: Asterisk ${ASTERISK_VERSION} + chan_dongle + chan_quectel"
 VOLUME ["/var/spool/aster"]

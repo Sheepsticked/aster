@@ -1,0 +1,20 @@
+#!/bin/sh
+# Aster — the image's entrypoint: gives the asterisk user the directories Asterisk writes and read access to the AMI
+# secret, whoever owns them when the container starts, then starts Asterisk, which drops to that user.
+set -eu
+
+# Only paths with another owner are changed, so an ordinary start writes nothing.
+for dir in /var/lib/asterisk /var/log/asterisk /var/spool/aster/events; do
+  if [ -d "$dir" ]; then
+    find "$dir" \( ! -user asterisk -o ! -group asterisk \) -exec chown -h asterisk:asterisk {} +
+  fi
+done
+
+conf=/etc/asterisk/manager.conf
+if [ -f "$conf" ] && [ "$(stat -c '%U:%G %a' "$conf")" != 'root:asterisk 640' ]; then
+  chown root:asterisk "$conf"
+  chmod 640 "$conf"
+fi
+
+# `-U` without `-G`: with a group given, Asterisk drops the supplementary groups and loses the modems' devices.
+exec asterisk -f -U asterisk -C /etc/asterisk/asterisk.conf "$@"

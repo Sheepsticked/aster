@@ -89,12 +89,15 @@ if [ -e "$HOME_DIR" ] && [ ! -f "$HOME_DIR/.aster-e2e" ]; then
 fi
 rm -rf "$HOME_DIR"
 mkdir -p "$HOME_DIR"/{config/asterisk,state/asterisk,state/prev,spool/events,logs/asterisk,backups}
+# Asterisk writes these as its own user, and the controller, which runs as the invoking user here, deletes in them.
+chmod 777 "$HOME_DIR"/{state/asterisk,spool/events,logs/asterisk}
 : > "$HOME_DIR/.aster-e2e"
 cp -r "$ROOT/docker/asterisk/test-config/." "$HOME_DIR/config/asterisk/"
 cp "$E2E/aster.yaml" "$HOME_DIR/config/aster.yaml"
 ami_secret=$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')
 sed "s|@ASTER_AMI_SECRET@|$ami_secret|" "$ROOT/install/templates/asterisk/manager.conf.tmpl" > "$HOME_DIR/config/asterisk/manager.conf"
-chmod 600 "$HOME_DIR/config/asterisk/manager.conf"
+# Asterisk reads it as its own user; the secret is made for this run only.
+chmod 644 "$HOME_DIR/config/asterisk/manager.conf"
 ( umask 077; printf 'ASTER_AMI_SECRET=%s\nTELEGRAM_BOT_TOKEN=1234567890:e2e-fake-token_of-the-bot-api-stand-in\n' "$ami_secret" > "$HOME_DIR/config/secrets.env" )
 ASTER_HOME=$HOME_DIR ASTER_ADMIN_PASSWORD=$PASSWORD node "$ROOT/packages/controller/bin/passwd.js" >/dev/null
 grep -q '^ASTER_ADMIN_PASSWORD_HASH=\$scrypt\$' "$HOME_DIR/config/secrets.env" || die "bin/passwd.js wrote no password hash"

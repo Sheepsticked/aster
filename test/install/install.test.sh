@@ -61,7 +61,7 @@ done
 check "directories are 0755" "$(mode_of "$HOME_DIR/config")" '755'
 check "backups/ is 0700 (it holds an archive with secrets.env)" "$(mode_of "$HOME_DIR/backups")" '700'
 check "secrets.env is 0600" "$(mode_of "$HOME_DIR/config/secrets.env")" '600'
-check "manager.conf is 0600" "$(mode_of "$HOME_DIR/config/asterisk/manager.conf")" '600'
+check "manager.conf is 0640 (Asterisk's group reads it)" "$(mode_of "$HOME_DIR/config/asterisk/manager.conf")" '640'
 check "a starter file is 0644" "$(mode_of "$HOME_DIR/config/asterisk/extensions.conf")" '644'
 check "no host script is copied into the home (they run from the checkout)" "$(exists "$HOME_DIR/bin")$(exists "$HOME_DIR/docker-compose.yml")" 'nono'
 

@@ -46,6 +46,7 @@ SD_TUNING=auto
 CHANGED=0
 MIN_FREE_KB=$((2 * 1024 * 1024))
 HEALTH_TIMEOUT=120
+ASTERISK_UID=5060           # docker/asterisk/Dockerfile: the user Asterisk drops to, which owns what it writes
 NODE_MAJOR=24               # packages/controller/package.json: engines.node >= 24.15
 
 SELF=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -370,17 +371,18 @@ make_tree() {
   # The backup archive holds config/secrets.env, so the directory it lands in is the operator's alone.
   ensure_dir "$HOME_DIR/backups" 700
 
-  # Everything in the home is root's: both containers run as root, and the controller mounts only these five
-  # directories. Anything owned by another uid (older installs) is given back to root.
+  # The home is root's, which is what the controller and the host scripts run as; the controller mounts only these five
+  # directories. The three Asterisk writes, and manager.conf's group, belong to Asterisk's user (the image sets them).
   if is_root; then
-    local path
-    for path in config state spool logs backups; do
-      if [ -n "$(find "$HOME_DIR/$path" \( ! -uid 0 -o ! -gid 0 \) -print -quit)" ]; then
-        chown -R 0:0 "$HOME_DIR/$path"
-        did "gave everything under $HOME_DIR/$path to root"
-      fi
-    done
-    ok "everything in $HOME_DIR is root's; the controller sees only config/, state/, spool/, logs/ and backups/"
+    local rest=( "$HOME_DIR/config" "$HOME_DIR/state" "$HOME_DIR/spool" "$HOME_DIR/logs" "$HOME_DIR/backups"
+                 -path "$HOME_DIR/state/asterisk" -prune -o -path "$HOME_DIR/logs/asterisk" -prune -o
+                 -path "$HOME_DIR/spool/events" -prune -o -path "$HOME_DIR/config/asterisk/manager.conf" -prune -o
+                 \( ! -uid 0 -o ! -gid 0 \) )
+    if [ -n "$(find "${rest[@]}" -print -quit)" ]; then
+      find "${rest[@]}" -exec chown 0:0 {} +
+      did "gave the rest of $HOME_DIR to root"
+    fi
+    ok "the home is root's except what Asterisk writes; the controller sees config/, state/, spool/, logs/, backups/"
   fi
 }
 
@@ -539,13 +541,19 @@ make_secrets() {
 # ---- 5. manager.conf --------------------------------------------------------------------------------------------
 
 render_manager_conf() {
-  step "5/8 manager.conf (AMI, 0600)"
-  local secret content
+  step "5/8 manager.conf (AMI, 0640)"
+  local secret content path
+  path="$HOME_DIR/config/asterisk/manager.conf"
   secret=$(secret_value ASTER_AMI_SECRET)
   [ -n "$secret" ] || die "no ASTER_AMI_SECRET in $SECRETS"
   content=$(sed "s|@ASTER_AMI_SECRET@|$secret|" "$SELF/templates/asterisk/manager.conf.tmpl")
   # write_if_different returns 1 when it left the file alone; that is not an error here.
-  write_if_different "$HOME_DIR/config/asterisk/manager.conf" 600 "$content" || true
+  write_if_different "$path" 640 "$content" || true
+  # Asterisk reads the AMI secret as its own user, and nobody else on the host can.
+  if is_root && [ "$(stat -c '%u:%g' "$path")" != "0:$ASTERISK_UID" ]; then
+    chown "0:$ASTERISK_UID" "$path"
+    did "gave $path to Asterisk's group"
+  fi
 }
 
 # ---- 6. udev ----------------------------------------------------------------------------------------------------

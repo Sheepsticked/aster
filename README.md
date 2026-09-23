@@ -185,9 +185,9 @@ why the starter file lowers it.
 
 ## How it works
 
-Two containers. **Asterisk 20** with PJSIP and both channel drivers runs privileged on the host network, because it
-needs the USB devices and SIP needs real ports. **The controller** — a Node service serving a Svelte UI — is
-unprivileged, runs no shell commands, and drives Asterisk over AMI.
+Two containers. **Asterisk 20** with PJSIP and both channel drivers runs on the host network, because SIP needs real
+ports; of the host's devices it can open only the modems' serial ports and sound cards, and it runs as a user of its
+own. **The controller** — a Node service serving a Svelte UI — runs no shell commands and drives Asterisk over AMI.
 
 The controller owns one file, `data/config/aster.yaml`, listing your modems, phones, ring groups and recipients.
 Every UI change is written there, and the Asterisk configuration is generated from it. That is why a change reloads

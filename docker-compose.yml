@@ -16,7 +16,11 @@ services:
       target: aster
     container_name: aster-asterisk
     network_mode: host
-    privileged: true
+    # All of /dev is mounted so modems plugged in later show up, but only these device types can be opened.
+    device_cgroup_rules:
+      - 'c 188:* rmw'   # ttyUSB (modem ports)
+      - 'c 166:* rmw'   # ttyACM
+      - 'c 116:* rmw'   # ALSA (Quectel USB audio)
     restart: unless-stopped
     volumes:
       - ${ASTER_HOME:-./data}/config/asterisk:/etc/asterisk
