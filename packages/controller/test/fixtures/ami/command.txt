@@ -1,0 +1,71 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 239
+LastReload: 239
+Status: Fully Booted
+
+Response: Success
+ActionID: ami-2
+Message: Command output follows
+Output: System uptime: 4 minutes
+Output: Last reload: 4 minutes
+
+Response: Error
+ActionID: ami-3
+Message: Command output follows
+Output: No such command 'pjsip reload' (type 'core show help pjsip reload' for other possible commands)
+
+Response: Success
+ActionID: ami-4
+Message: Command output follows
+Output: Module 'res_pjsip.so' reloaded successfully.
+
+Event: Reload
+Privilege: system,all
+Module: res_pjsip.so
+Status: 0
+
+Response: Success
+ActionID: ami-5
+Message: Command output follows
+Output: [ Context 'smoke' created by 'pbx_config' ]
+Output:   'call' =>         1. Set(CALLERID(num)=`id`;$(id))              [extensions.conf:29]
+Output:                     2. Goto(aster-in-gsm_test,s,1)                [extensions.conf:30]
+Output:   'did' =>          1. Set(CALLERID(num)=+375290000001)           [extensions.conf:31]
+Output:                     2. Goto(aster-in-gsm_test,+1234567890,1)      [extensions.conf:32]
+Output:   'report' =>       1. Set(CALLERID(num)=+375290000002)           [extensions.conf:37]
+Output:                     2. Set(SMS_REPORT_PAYLOAD=42:1)               [extensions.conf:38]
+Output:                     3. Set(SMS_REPORT_TYPE=e)                     [extensions.conf:39]
+Output:                     4. Set(SMS_REPORT_SUCCESS=1)                  [extensions.conf:40]
+Output:                     5. Set(SMS_REPORT_TS=2026-09-10 09:30:05 +0300) [extensions.conf:41]
+Output:                     6. Set(SMS_REPORT_DT=2026-09-10 09:30:07 +0300) [extensions.conf:42]
+Output:                     7. Set(SMS_REPORT=+CDS: 6)                    [extensions.conf:43]
+Output:                     8. Goto(aster-in-gsm_test,report,1)           [extensions.conf:44]
+Output:   'sms' =>          1. Set(CALLERID(num)=";touch /tmp/aster-smoke-pwned;") [extensions.conf:33]
+Output:                     2. Set(SMS_BASE64=${BASE64_ENCODE(Привет из smoke-теста)}) [extensions.conf:34]
+Output:                     3. Set(SMS_TS=2026-09-10 09:30:00 +0300)      [extensions.conf:35]
+Output:                     4. Goto(aster-in-gsm_test,sms,1)              [extensions.conf:36]
+Output:   'sms-bad' =>      1. Set(CALLERID(num)=+375290000003)           [extensions.conf:45]
+Output:                     2. Set(SMS_BASE64=not base64!)                [extensions.conf:46]
+Output:                     3. Goto(aster-in-gsm_test,sms,1)              [extensions.conf:47]
+Output: 
+Output: -= 5 extensions (19 priorities) in 1 context. =-
+
+Response: Error
+ActionID: ami-6
+Message: Invalid/unknown command: NoSuchAction. Use Action: ListCommands to show available commands.
+
+Response: Success
+ActionID: ami-7
+Ping: Pong
+Timestamp: 1789046548.044481
+
+Response: Goodbye
+ActionID: ami-8
+Message: Thanks for all the fish.
+

@@ -1,0 +1,5 @@
+Asterisk Call Manager/9.0.0
+Response: Error
+ActionID: ami-1
+Message: Authentication failed
+

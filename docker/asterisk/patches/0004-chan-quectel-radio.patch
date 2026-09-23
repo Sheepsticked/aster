@@ -1,0 +1,502 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Sun, 13 Sep 2026 00:00:00 +0000
+Subject: [PATCH] radio: keep a started device's radio on or off as its
+ configuration says
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: a modem that Aster disables must leave the mobile network and stay
+         off it across Asterisk restarts, driver reconnects and modem resets,
+         so that calls to a number shared with another SIM (a multi-SIM
+         tariff) reach the other phone instead of a modem nobody answers
+         (applies on top of 0003)
+
+New device setting `radio = keep | on | off` (default keep: no AT+CFUN at
+all, the upstream behaviour), read like every shared setting.
+
+- off: right after ATE0 the initialization sends AT+CFUN? and AT+CFUN=0,
+  then only the identity commands up to AT+CGSN, and stops there. The
+  device stays connected (the monitor keeps pinging it) but is never
+  initialized: no SIM commands, no SMS poll, no calls, no SMS. Its state
+  reads "Radio off". Every reconnect (a driver restart, a reload, a modem
+  that re-enumerated after a reset or a power cut) switches the radio off
+  again, because the modems do not store AT+CFUN: a Quectel EC25-EUX and a
+  Huawei E173 both come back from AT+CFUN=1,1 with +CFUN: 1, and the EC25
+  also forgets AT+COPS=2.
+- on: AT+CFUN? and AT+CFUN=1 right after ATE0, then the usual
+  initialization, so a modem that was switched off comes back.
+- 0 and not 4: 27.007 makes only 0 and 1 mandatory, and Huawei firmware
+  treats 4 as an offline mode that refuses AT+CFUN=1 and AT+CFUN=0 until a
+  reset (the E173 does exactly that), while 0 -> 1 works on both modems.
+  A modem found in that offline mode counts as off for radio = off; for
+  radio = on it is reset (AT+CFUN=1,1, written directly because the
+  initialization task holds the queue) once, until AT+CFUN=1 succeeds again.
+- the three commands carry ATQ_CMD_FLAG_IGNORE, so an ERROR does not drop
+  the rest of the initialization task: a failed AT+CFUN? leaves the
+  decision to AT+CFUN=<n>, and a refused AT+CFUN=0 of a modem already off
+  goes on with the identity; every error that has to stop the
+  initialization disconnects explicitly.
+- a radio-off device does not open its UAC sound card, so a missing card
+  cannot keep a disabled modem's radio on; the audio tty of a non-UAC
+  device is still opened, because the monitor checks it. disconnect_quectel()
+  closes what the connect opened rather than what the settings say now (a
+  reload copies quec_uac into a running device) and clears the card handles.
+- a radio-off device whose data tty does not exist (a disabled modem with
+  fixed ports that is not plugged in) waits quietly: no "Trying to connect"
+  and no "unable to open" line every discovery interval, which an idle
+  appliance would otherwise write to its SD card.
+- a change of `radio` restarts the device on reload, like `resetquectel`.
+- +CFUN: is a classified response now (remembered in pvt->cfun); it is not
+  unsolicited, so a QuectelAtCommand of AT+CFUN? still reports it as a Line.
+- `quectel show device settings` prints Radio; QuectelDeviceEntry carries
+  RadioSetting.
+---
+ at_command.c     | 21 +++++++++++++
+ at_command.h     |  3 ++
+ at_queue.h       |  1 +
+ at_response.c    | 77 ++++++++++++++++++++++++++++++++++++++++++++++++
+ at_response.h    |  1 +
+ chan_quectel.c   | 34 +++++++++++++++------
+ chan_quectel.h   |  3 ++
+ cli.c            |  1 +
+ dc_config.c      | 21 +++++++++++++
+ dc_config.h      | 10 +++++++
+ etc/quectel.conf |  1 +
+ manager.c        |  1 +
+ 12 files changed, 165 insertions(+), 9 deletions(-)
+
+diff --git a/at_command.c b/at_command.c
+index acd6239..62b736f 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -143,6 +143,13 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 		ATQ_CMD_DECLARE_ST(CMD_AT, cmd_at),
+ 		ATQ_CMD_DECLARE_ST(CMD_AT_Z, cmd2),		/* optional,  reload configuration */
+ 		ATQ_CMD_DECLARE_ST(CMD_AT_E, cmd3),		/* disable echo */
++		/* radio = on|off (Aster radio patch): what the modem is set to now, then the setting; a switch takes seconds.
++		   IGNORE: an ERROR must not drop the rest of this task (at_queue_remove_cmd) — a failed AT+CFUN? leaves the decision
++		   to AT+CFUN=<n>, and a refused AT+CFUN=0 of a modem that is already off goes on with the identity; every error that
++		   has to stop the initialization disconnects explicitly (at_response_error) */
++		ATQ_CMD_DECLARE_STI(CMD_AT_CFUN_QUERY, "AT+CFUN?\r"),
++		ATQ_CMD_DECLARE_STIT(CMD_AT_CFUN_ON, "AT+CFUN=1\r", ATQ_CMD_TIMEOUT_RADIO, 0),
++		ATQ_CMD_DECLARE_STIT(CMD_AT_CFUN_OFF, "AT+CFUN=0\r", ATQ_CMD_TIMEOUT_RADIO, 0),
+ 		ATQ_CMD_DECLARE_DYN(CMD_AT_U2DIAG),		/* optional, Enable or disable some devices */
+ 		ATQ_CMD_DECLARE_ST(CMD_AT_CGMI, cmd5),		/* Getting manufacturer info */
+ 
+@@ -174,6 +181,7 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 		};
+ 	unsigned in, out;
+ 	int begin = -1;
++	int cgsn_passed = 0;
+ 	int err;
+ 	char * ptmp1 = NULL;
+ 	pvt_t * pvt = cpvt->pvt;
+@@ -182,6 +190,11 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 	/* customize list */
+ 	for(in = out = 0; in < ITEMS_OF(st_cmds); in++)
+ 	{
++		/* radio = off: nothing after the IMEI is sent, the device only stays connected (Aster radio patch) */
++		int identified = cgsn_passed;
++		if(st_cmds[in].cmd == CMD_AT_CGSN)
++			cgsn_passed = 1;
++
+ 		if(begin == -1)
+ 		{
+ 			if(st_cmds[in].cmd == from_command)
+@@ -194,6 +207,14 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 			continue;
+ 		if(st_cmds[in].cmd == CMD_AT_U2DIAG && CONF_SHARED(pvt, u2diag) == -1)
+ 			continue;
++		if(st_cmds[in].cmd == CMD_AT_CFUN_QUERY && CONF_SHARED(pvt, radio) == DC_RADIO_KEEP)
++			continue;
++		if(st_cmds[in].cmd == CMD_AT_CFUN_ON && CONF_SHARED(pvt, radio) != DC_RADIO_ON)
++			continue;
++		if(st_cmds[in].cmd == CMD_AT_CFUN_OFF && CONF_SHARED(pvt, radio) != DC_RADIO_OFF)
++			continue;
++		if(identified && CONF_SHARED(pvt, radio) == DC_RADIO_OFF)
++			continue;
+ 
+ 		memcpy(&cmds[out], &st_cmds[in], sizeof(st_cmds[in]));
+ 
+diff --git a/at_command.h b/at_command.h
+index 040e408..a8eb9ac 100644
+--- a/at_command.h
++++ b/at_command.h
+@@ -24,6 +24,9 @@
+ 	_( AT_CCWA_STATUS,  "AT+CCWA?") \
+ 	_( AT_CCWA_SET,     "AT+CCWA=") \
+ 	_( AT_CFUN,         "AT+CFUN") \
++	_( AT_CFUN_QUERY,   "AT+CFUN?") \
++	_( AT_CFUN_ON,      "AT+CFUN=1") \
++	_( AT_CFUN_OFF,     "AT+CFUN=0") \
+ \
+ 	_( AT_CGMI,         "AT+CGMI") \
+ 	_( AT_CGMM,         "AT+CGMM") \
+diff --git a/at_queue.h b/at_queue.h
+index 4402709..be7f7a0 100644
+--- a/at_queue.h
++++ b/at_queue.h
+@@ -29,6 +29,7 @@ typedef struct at_queue_cmd
+ #define ATQ_CMD_TIMEOUT_SHORT	1		/*!< timeout value  1 sec */
+ #define ATQ_CMD_TIMEOUT_MEDIUM	5		/*!< timeout value  5 sec */
+ #define ATQ_CMD_TIMEOUT_LONG	40		/*!< timeout value 40 sec */
++#define ATQ_CMD_TIMEOUT_RADIO	30		/*!< timeout value 30 sec: AT+CFUN=<n> switching the radio (Aster radio patch) */
+ 
+ 	char*			data;			/*!< command and data to send in device */
+ 	unsigned		length;			/*!< data length */
+diff --git a/at_response.c b/at_response.c
+index b808e4e..b89e7a7 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -234,6 +234,22 @@ static int at_response_ok (struct pvt* pvt, at_res_t res)
+ 				ast_debug (3, "[%s] %s sent successfully\n", PVT_ID(pvt), at_cmd2str (ecmd->cmd));
+ 				break;
+ 
++			case CMD_AT_CFUN_QUERY:
++				ast_debug (3, "[%s] %s sent successfully\n", PVT_ID(pvt), at_cmd2str (ecmd->cmd));
++				break;
++
++			case CMD_AT_CFUN_ON:
++				pvt->cfun = 1;
++				pvt->radio_reset = 0;
++				ast_verb (3, "[%s] Radio on (AT+CFUN=1)\n", PVT_ID(pvt));
++				break;
++
++			case CMD_AT_CFUN_OFF:
++				pvt->cfun = 0;
++				pvt->radio_off = 1;
++				ast_verb (3, "[%s] Radio off (AT+CFUN=0): the device stays connected and is not initialized\n", PVT_ID(pvt));
++				break;
++
+ 			case CMD_AT_COPS_INIT:
+ 				ast_debug (1, "[%s] Operator select parameters set\n", PVT_ID(pvt));
+ 				break;
+@@ -509,6 +525,39 @@ static int at_response_error (struct pvt* pvt, at_res_t res, const char* str)
+ 				log_cmd_response_error(pvt, ecmd, "[%s] Error checking PIN state\n", PVT_ID(pvt));
+ 				goto e_return;
+ 
++			case CMD_AT_CFUN_QUERY:
++				/* not critical: the AT+CFUN=<n> that follows decides (Aster radio patch) */
++				log_cmd_response_error(pvt, ecmd, "[%s] Querying the radio functionality failed\n", PVT_ID(pvt));
++				break;
++
++			case CMD_AT_CFUN_ON:
++				if (pvt->cfun == 4 && !pvt->radio_reset)
++				{
++					/* Huawei firmware refuses AT+CFUN=1 in its offline mode (+CFUN: 4) and leaves that mode only through a
++					   reset. The reset is written at once (the initialization task is still the head of the queue) and the
++					   device reconnects after the modem is back. One reset until AT+CFUN=1 succeeds again, so a modem that
++					   keeps coming back offline is not reset in a loop. */
++					static const char reset[] = "AT+CFUN=1,1\r";
++
++					pvt->radio_reset = 1;
++					ast_log (LOG_WARNING, "[%s] Radio in offline mode (+CFUN: 4) refuses AT+CFUN=1: resetting the modem\n", PVT_ID(pvt));
++					at_write (pvt, reset, STRLEN (reset));
++					goto e_return;
++				}
++				log_cmd_response_error(pvt, ecmd, "[%s] Switching the radio on (AT+CFUN=1) failed\n", PVT_ID(pvt));
++				goto e_return;
++
++			case CMD_AT_CFUN_OFF:
++				if (pvt->cfun == 0 || pvt->cfun == 4)
++				{
++					/* already off: Huawei firmware refuses AT+CFUN=0 in its offline mode (+CFUN: 4) */
++					pvt->radio_off = 1;
++					ast_verb (3, "[%s] Radio already off (+CFUN: %d): the device stays connected and is not initialized\n", PVT_ID(pvt), pvt->cfun);
++					break;
++				}
++				log_cmd_response_error(pvt, ecmd, "[%s] Switching the radio off (AT+CFUN=0) failed\n", PVT_ID(pvt));
++				goto e_return;
++
+ 			case CMD_AT_COPS_INIT:
+ 				log_cmd_response_error(pvt, ecmd, "[%s] Error setting operator select parameters\n", PVT_ID(pvt));
+ 				goto e_return;
+@@ -1794,6 +1843,29 @@ static int at_response_cusd (struct pvt * pvt, char * str, size_t len)
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Handle +CFUN response: remember the radio functionality the modem reports (Aster radio patch)
++ * \param pvt -- pvt structure
++ * \param str -- string containing response (null terminated)
++ * \retval  0 success
++ */
++
++static int at_response_cfun (struct pvt* pvt, const char* str)
++{
++	int fun;
++
++	if (sscanf (str, "+CFUN:%d", &fun) == 1)
++	{
++		pvt->cfun = fun;
++		ast_debug (1, "[%s] Radio functionality %d\n", PVT_ID(pvt), fun);
++	}
++	else
++	{
++		ast_debug (1, "[%s] Error parsing +CFUN message: %s\n", PVT_ID(pvt), str);
++	}
++	return 0;
++}
++
+ /*!
+  * \brief Handle +CPIN response
+  * \param pvt -- pvt structure
+@@ -2227,6 +2299,11 @@ int at_response (struct pvt* pvt, const struct iovec iov[2], int iovcnt, at_res_
+ 
+                                return 0;
+ 
++			case RES_CFUN:
++				/* radio functionality (Aster radio patch): an error here is not fatal */
++				at_response_cfun (pvt, str);
++				return 0;
++
+ 			case RES_CPIN:
+ 				/* fatal */
+ 				return at_response_cpin (pvt, str, len);
+diff --git a/at_response.h b/at_response.h
+index e3e689d..7a302d0 100644
+--- a/at_response.h
++++ b/at_response.h
+@@ -26,6 +26,7 @@ struct iovec;
+ 	_( CME_ERROR,   "+CME ERROR",   "+CME ERROR:") \
+ 	_( CMTI,        "+CMTI",        "+CMTI:") \
+ 	_( CDSI,        "+CDSI",        "+CDSI:") \
++	_( CFUN,        "+CFUN",        "+CFUN:") \
+ \
+ 	_( CNUM,        "+CNUM",        "+CNUM:") \
+ 		/* and "ERROR+CNUM:", hacked later on */ \
+diff --git a/chan_quectel.c b/chan_quectel.c
+index adce0c5..10a6138 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -420,11 +420,12 @@ static void disconnect_quectel (struct pvt* pvt)
+ 	}
+ 	at_queue_flush(pvt);
+ 	pvt->last_dialed_cpvt = NULL;
+-        if (strcmp(CONF_UNIQ(pvt, quec_uac),"1") == 0) {
+-	if (pvt->icard) snd_pcm_close(pvt->icard);
+-	if (pvt->ocard)	snd_pcm_close(pvt->ocard);
+-                                                       }
+-	else closetty (pvt->audio_fd, &pvt->alock);
++        /* close what the connect opened, whatever the settings say now (Aster radio patch): a reload copies quec_uac and alsadev
++	   into a running device, and a device with its radio off opens no card; the card handles are cleared so that they are
++	   never closed twice, and an audio tty is open exactly when opentty() left its lock */
++	if (pvt->icard) { snd_pcm_close(pvt->icard); pvt->icard = NULL; }
++	if (pvt->ocard) { snd_pcm_close(pvt->ocard); pvt->ocard = NULL; }
++	if (pvt->alock) closetty (pvt->audio_fd, &pvt->alock);
+ 
+ 	closetty (pvt->data_fd, &pvt->dlock);
+ 
+@@ -468,6 +469,8 @@ static void disconnect_quectel (struct pvt* pvt)
+ 
+ 	pvt->connected		= 0;
+ 	pvt->initialized	= 0;
++	pvt->radio_off		= 0;
++	pvt->cfun		= -1;
+ 	pvt->has_call_waiting	= 0;
+ 
+ 	/* FIXME: LOST real device state */
+@@ -618,8 +621,8 @@ static void* do_monitor_phone (void* data)
+ 		goto e_cleanup;
+ 	}
+ 
+-	/* Poll first SMS, if any */
+-	if (at_poll_sms(pvt) == 0)
++	/* Poll first SMS, if any; a device whose radio is off is left alone (Aster radio patch) */
++	if (CONF_SHARED(pvt, radio) != DC_RADIO_OFF && at_poll_sms(pvt) == 0)
+ 	{
+ 		ast_debug (1, "[%s] Polling first SMS message\n", PVT_ID(pvt));
+ 	}
+@@ -704,7 +707,7 @@ static void* do_monitor_phone (void* data)
+ 	ast_mutex_lock (&pvt->lock);
+ 
+ e_cleanup:
+-	if (!pvt->initialized)
++	if (!pvt->initialized && !pvt->radio_off)
+ 	{
+ 		// TODO: send monitor event
+ 		ast_verb (3, "[%s] Error initializing Quectel\n", dev);
+@@ -831,6 +834,14 @@ static void pvt_start(struct pvt * pvt)
+ 		return;
+ 	}
+ 
++	/* radio = off (Aster radio patch): a disabled modem that is not plugged in is not an error. Its fixed data tty is
++	   looked for quietly, so an idle appliance writes no "Trying to connect" or "unable to open" line for it every
++	   discovery interval (a device found by IMEI is quiet already: the discovery above fails at debug level) */
++	if (CONF_SHARED(pvt, radio) == DC_RADIO_OFF && access(PVT_STATE(pvt, data_tty), F_OK) != 0) {
++		ast_debug(3, "[%s] %s does not exist; the device with its radio off waits for it\n", PVT_ID(pvt), PVT_STATE(pvt, data_tty));
++		return;
++	}
++
+ 	ast_verb(3, "[%s] Trying to connect on %s...\n", PVT_ID(pvt), PVT_STATE(pvt, data_tty));
+ 
+ 
+@@ -839,6 +850,9 @@ static void pvt_start(struct pvt * pvt)
+ 		return;
+ 	}
+         if (strcmp(CONF_UNIQ(pvt, quec_uac),"1") == 0) {
++		/* radio = off (Aster radio patch): the device only answers AT, so its UAC sound card is not opened; a missing card
++		   must not keep a disabled modem's radio on. The audio tty of a non-UAC device is still opened: the monitor watches it. */
++		if (CONF_SHARED(pvt, radio) != DC_RADIO_OFF)
+              if (pvt->audio_fd < 0) if (soundcard_init(pvt) < 0) disconnect_quectel (pvt);
+                                                         }
+         else {
+@@ -1432,7 +1446,7 @@ static const char * pvt_state_base(const struct pvt * pvt)
+ 	else if(!pvt->connected)
+ 		state = "Not connected";
+ 	else if(!pvt->initialized)
+-		state = "Not initialized";
++		state = pvt->radio_off ? "Radio off" : "Not initialized";
+ 	else if(!pvt->gsm_registered)
+ 		state = "GSM not registered";
+ 	return state;
+@@ -1659,6 +1673,7 @@ static struct pvt * pvt_create(const pvt_config_t * settings)
+ 		pvt->timeout			= DATA_READ_TIMEOUT;
+ 		pvt->gsm_reg_status		= -1;
+ 		pvt->incoming_sms_index		= -1U;
++		pvt->cfun			= -1;
+ 
+ 		ast_copy_string (pvt->provider_name, "NONE", sizeof (pvt->provider_name));
+ 		ast_copy_string (pvt->subscriber_number, "Unknown", sizeof (pvt->subscriber_number));
+@@ -1727,6 +1742,7 @@ static int pvt_reconfigure(struct pvt * pvt, const pvt_config_t * settings, rest
+ 			|| strcmp(UCONFIG(settings, imsi), CONF_UNIQ(pvt, imsi))
+ 			|| SCONFIG(settings, u2diag) != CONF_SHARED(pvt, u2diag)
+ 			|| SCONFIG(settings, resetquectel) != CONF_SHARED(pvt, resetquectel)
++			|| SCONFIG(settings, radio) != CONF_SHARED(pvt, radio)
+ 			|| SCONFIG(settings, callwaiting) != CONF_SHARED(pvt, callwaiting))
+ 		{
+ 			/* TODO: schedule restart */
+diff --git a/chan_quectel.h b/chan_quectel.h
+index 777c09f..97c0fe8 100644
+--- a/chan_quectel.h
++++ b/chan_quectel.h
+@@ -194,6 +194,9 @@ typedef struct pvt
+ 	volatile unsigned int	connected:1;			/*!< do we have an connection to a device */
+ 	unsigned int		initialized:1;			/*!< whether a service level connection exists or not */
+ 	unsigned int		gsm_registered:1;		/*!< do we have an registration to a GSM */
++	unsigned int		radio_off:1;			/*!< radio = off: the radio is off on this connection and the device is kept idle (Aster radio patch) */
++	unsigned int		radio_reset:1;			/*!< a reset was sent to leave offline mode (+CFUN: 4) and AT+CFUN=1 has not succeeded since */
++	int			cfun;				/*!< the last +CFUN: the modem reported on this connection, -1 unknown */
+ 	unsigned int		dialing;			/*!< HW state; true from ATD response OK until CEND or CONN for this call idx */
+ 	unsigned int		ring:1;				/*!< HW state; true if has incoming call from first RING until CEND or CONN */
+ 	unsigned int		cwaiting:1;			/*!< HW state; true if has incoming call waiting from first CCWA until CEND or CONN for */
+diff --git a/cli.c b/cli.c
+index d9c2475..46359ff 100644
+--- a/cli.c
++++ b/cli.c
+@@ -148,6 +148,7 @@ static char* cli_show_device_settings (struct ast_cli_entry* e, int cmd, struct
+ 		ast_cli (a->fd, "  Reset Quectel            : %s\n", CONF_SHARED(pvt, resetquectel) ? "Yes" : "No");
+ 		ast_cli (a->fd, "  Call Waiting            : %s\n", dc_cw_setting2str(CONF_SHARED(pvt, callwaiting)));
+ 		ast_cli (a->fd, "  DTMF                    : %s\n", dc_dtmf_setting2str(CONF_SHARED(pvt, dtmf)));
++		ast_cli (a->fd, "  Radio                   : %s\n", dc_radio_setting2str(CONF_SHARED(pvt, radio)));
+ 		ast_cli (a->fd, "  Minimal DTMF Gap        : %d\n", CONF_SHARED(pvt, mindtmfgap));
+ 		ast_cli (a->fd, "  Minimal DTMF Duration   : %d\n", CONF_SHARED(pvt, mindtmfduration));
+ 		ast_cli (a->fd, "  Minimal DTMF Interval   : %d\n", CONF_SHARED(pvt, mindtmfinterval));
+diff --git a/dc_config.c b/dc_config.c
+index ff70376..7c67d87 100644
+--- a/dc_config.c
++++ b/dc_config.c
+@@ -26,6 +26,18 @@ EXPORT_DEF const char * dc_dtmf_setting2str(dc_dtmf_setting_t dtmf)
+ 	return enum2str(dtmf, dtmf_values, ITEMS_OF(dtmf_values));
+ }
+ 
++static const char * const radio_values[] = { "keep", "on", "off" };
++
++EXPORT_DEF int dc_radio_str2setting(const char * value)
++{
++	return str2enum(value, radio_values, ITEMS_OF(radio_values));
++}
++
++EXPORT_DEF const char * dc_radio_setting2str(dc_radio_setting_t radio)
++{
++	return enum2str(radio, radio_values, ITEMS_OF(radio_values));
++}
++
+ #/* assume config is zerofill */
+ static int dc_uconfig_fill(struct ast_config * cfg, const char * cat, struct dc_uconfig * config)
+ {
+@@ -97,6 +109,7 @@ EXPORT_DEF void dc_sconfig_fill_defaults(struct dc_sconfig * config)
+ 	config->initstate		= DEV_STATE_STARTED;
+ 	config->callwaiting 		= CALL_WAITING_AUTO;
+ 	config->dtmf			= DC_DTMF_SETTING_RELAX;
++	config->radio			= DC_RADIO_KEEP;
+ 
+ 	config->mindtmfgap		= DEFAULT_MINDTMFGAP;
+ 	config->mindtmfduration		= DEFAULT_MINDTMFDURATION;
+@@ -198,6 +211,14 @@ EXPORT_DEF void dc_sconfig_fill(struct ast_config * cfg, const char * cat, struc
+ 			else
+ 				ast_log(LOG_ERROR, "Invalid value for 'dtmf': '%s', setting default 'relax'\n", v->value);
+ 		}
++		else if (!strcasecmp (v->name, "radio"))
++		{
++			int val = dc_radio_str2setting(v->value);
++			if(val >= 0)
++				config->radio = val;
++			else
++				ast_log(LOG_ERROR, "Invalid value for 'radio': '%s', must be one of 'keep' 'on' 'off' default is 'keep'\n", v->value);
++		}
+ 		else if (!strcasecmp (v->name, "mindtmfgap"))
+ 		{
+ 			errno = 0;
+diff --git a/dc_config.h b/dc_config.h
+index fc1f6a3..5592c9b 100644
+--- a/dc_config.h
++++ b/dc_config.h
+@@ -44,6 +44,13 @@ typedef enum {
+ 	DC_DTMF_SETTING_RELAX,
+ } dc_dtmf_setting_t;
+ 
++/* The radio functionality a started device is initialized with (Aster radio patch, docker/asterisk/patches/README.md) */
++typedef enum {
++	DC_RADIO_KEEP = 0,		/*!< no AT+CFUN: the modem keeps whatever it has (upstream behaviour) */
++	DC_RADIO_ON,			/*!< AT+CFUN=1 before the initialization */
++	DC_RADIO_OFF,			/*!< AT+CFUN=0 right after connecting; the device is then only identified and kept connected, idle */
++} dc_radio_setting_t;
++
+ /*
+  Config API
+  Operations
+@@ -82,6 +89,7 @@ typedef struct dc_sconfig
+ 
+ 	call_waiting_t		callwaiting;			/*!< enable/disable/auto call waiting CALL_WAITING_AUTO */
+ 	dc_dtmf_setting_t	dtmf;				/*!< off/inband/relax incoming DTMF detection, default DC_DTMF_SETTING_RELAX */
++	dc_radio_setting_t	radio;				/*!< keep/on/off radio functionality at initialization, default DC_RADIO_KEEP */
+ 
+ 	int			mindtmfgap;			/*!< minimal time in ms from end of previews DTMF and begining of next */
+ #define DEFAULT_MINDTMFGAP	45
+@@ -130,6 +138,8 @@ typedef struct pvt_config
+ 
+ EXPORT_DECL int dc_dtmf_str2setting(const char * str);
+ EXPORT_DECL const char * dc_dtmf_setting2str(dc_dtmf_setting_t dtmf);
++EXPORT_DECL int dc_radio_str2setting(const char * str);
++EXPORT_DECL const char * dc_radio_setting2str(dc_radio_setting_t radio);
+ EXPORT_DECL void dc_sconfig_fill_defaults(struct dc_sconfig * config);
+ EXPORT_DECL void dc_sconfig_fill(struct ast_config * cfg, const char * cat, struct dc_sconfig * config);
+ EXPORT_DECL void dc_gconfig_fill(struct ast_config * cfg, const char * cat, struct dc_gconfig * config);
+diff --git a/etc/quectel.conf b/etc/quectel.conf
+index cdd7815..a4b666f 100644
+--- a/etc/quectel.conf
++++ b/etc/quectel.conf
+@@ -65,6 +65,7 @@ callwaiting=auto		; if 'yes' allow incoming calls waiting; by default use networ
+ disable=no			; OBSOLETED by initstate: if 'yes' no load this device and just ignore this section
+ 
+ initstate=start			; specified initial state of device, must be one of 'stop' 'start' 'remote'
++;radio=keep			; radio at initialization: 'on' sends AT+CFUN=1 first, 'off' sends AT+CFUN=0 and then keeps the device connected and idle, 'keep' sends neither
+ 				;   'remove' same as 'disable=yes'
+ 
+ ;exten=70		; exten for start incoming calls, only in case of Subscriber Number not available!, also set to CALLERID(ndid)
+diff --git a/manager.c b/manager.c
+index 2ef615b..4ee3015 100644
+--- a/manager.c
++++ b/manager.c
+@@ -67,6 +67,7 @@ static int manager_show_devices (struct mansession* s, const struct message* m)
+ 			astman_append (s, "ResetQuectel: %s\r\n", CONF_SHARED(pvt, resetquectel) ? "Yes" : "No");
+ 			astman_append (s, "CallWaitingSetting: %s\r\n", dc_cw_setting2str(CONF_SHARED(pvt, callwaiting)));
+ 			astman_append (s, "DTMF: %s\r\n", dc_dtmf_setting2str(CONF_SHARED(pvt, dtmf)));
++			astman_append (s, "RadioSetting: %s\r\n", dc_radio_setting2str(CONF_SHARED(pvt, radio)));
+ 			astman_append (s, "MinimalDTMFGap: %d\r\n", CONF_SHARED(pvt, mindtmfgap));
+ 			astman_append (s, "MinimalDTMFDuration: %d\r\n", CONF_SHARED(pvt, mindtmfduration));
+ 			astman_append (s, "MinimalDTMFInterval: %d\r\n", CONF_SHARED(pvt, mindtmfinterval));
+-- 
+2.43.0
+

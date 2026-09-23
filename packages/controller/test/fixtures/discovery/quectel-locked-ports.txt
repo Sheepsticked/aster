@@ -1,0 +1,7 @@
+; discovered device
+[dc_3121_3121](defaults)
+;audio=/dev/ttyUSB1
+;data=/dev/ttyUSB2
+imei=356938031234560
+imsi=356938031234560
+

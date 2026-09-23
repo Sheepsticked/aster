@@ -1,0 +1,40 @@
+# Aster — the registry of docker/asterisk/test-config. The five files in test-config/aster.d are the controller's
+# generator output for this file (packages/controller/src/config/generators.js); packages/controller/test/generators.test.js
+# fails when they differ. Regenerate them with:
+#   ASTER_UPDATE_SNAPSHOTS=1 npm test -w packages/controller -- --test-name-pattern generators
+# The disabled modems are started with their radio off and none connects (a container has no modem); every entry shows one
+# generator rule that smoke-test.sh loads.
+version: 1
+modems:
+  - id: gsm_test             # the smoke-test device: dialplan → aster-emit cases, QuectelAtCommand cases; rings phone 599
+    driver: quectel
+    imei: "000000000000000"
+    enabled: false
+    ring: ["599"]
+    group: 1
+  - id: gsm_dongle           # the chan_dongle device of the DongleAtCommand cases
+    driver: dongle
+    imei: "000000000000001"
+    enabled: false
+    group: 1
+  - id: gsm_uac              # quec_uac + alsadev from usb_port; custom incoming context, so no aster-ring-gsm_uac
+    driver: quectel
+    imei: "000000000000002"
+    enabled: false
+    uac: true
+    usb_port: "1-1.3"
+    incoming_context: smoke-in
+  - id: gsm_unmapped         # enabled, but uac without usb_port: initstate stop, no quec_uac; ring [] hangs up at once
+    driver: quectel
+    imei: "000000000000003"
+    enabled: true
+    uac: true
+  - id: gsm_ports            # ports escape hatch: data/audio instead of imei; group null writes no group line
+    driver: dongle
+    imei: "000000000000004"
+    enabled: false
+    ports: { data: /dev/ttyUSB9, audio: /dev/ttyUSB8 }
+phones:
+  - { number: "599", secret: "599", outbound: gsm_test }
+  - { number: "598", secret: ">598", outbound: null, direct_media: true }   # a secret starting with ">" (password= >598)
+  - { number: "597", secret: "597", outbound: gsm_ports, context: smoke-in }

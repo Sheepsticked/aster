@@ -1,0 +1,15 @@
+# Aster — build context of docker/controller/Dockerfile (context = repository root), written as an allowlist: only what the
+# image copies is sent, so .git, node_modules, .dev/ and any local secrets.env or database never reach the builder.
+# Used only by builds whose context is the repository root (the Asterisk image's context is docker/asterisk). The UI stage
+#  needs the sources Vite reads — index.html, vite.config.js and src/ — and nothing else of packages/ui: its Playwright
+# check, its screenshots and a dist/ built on the host stay outside, so the image always builds the UI from source.
+*
+!package.json
+!package-lock.json
+!packages/controller/package.json
+!packages/controller/src/
+!packages/controller/bin/
+!packages/ui/package.json
+!packages/ui/index.html
+!packages/ui/vite.config.js
+!packages/ui/src/

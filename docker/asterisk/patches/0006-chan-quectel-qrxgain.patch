@@ -1,0 +1,204 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Sat, 19 Sep 2026 00:00:00 +0000
+Subject: [PATCH] qrxgain: send the modem's downlink digital gain at every
+ connect
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: an EC25-EUX delivers the far end's audio at its default
+         AT+QRXGAIN of 20577, about 8 dB above 8192, and a caller of
+         normal loudness then clips inside the modem's PCM; the modem
+         forgets AT+QRXGAIN at every reset, so the driver has to send it
+         at every connect (applies on top of 0005)
+
+New shared setting `qrxgain = <0..65535>` (default: absent, nothing is
+sent), read like every shared setting, so `[defaults]` reaches every
+device. When set, the initialization sends `AT+QRXGAIN=<n>` right after
+the voice-mode queries (AT+QPCMV?, AT+CPCMREG?) at every connect: a
+start, a restart, a reload that restarts the device, the reconnect after
+a reset or a power cut. The command is dynamic like AT^U2DIAG (the value
+is formatted in) and its error is ignored like the voice-mode queries':
+a modem that refuses it (not a Quectel) logs one WARNING and goes on
+initializing with its gain unchanged; success is one verbose(3) line.
+
+`quectel show device settings` prints `QRXGAIN`, `QuectelShowDevices`
+carries `QRXGain: <n>` (-1 when absent). No change for a device without
+the setting.
+---
+ at_command.c     | 13 +++++++++++++
+ at_command.h     |  1 +
+ at_response.c    |  8 ++++++++
+ cli.c            |  1 +
+ dc_config.c      | 11 +++++++++++
+ dc_config.h      |  1 +
+ etc/quectel.conf |  1 +
+ manager.c        |  1 +
+ 8 files changed, 37 insertions(+)
+
+diff --git a/at_command.c b/at_command.c
+index 62b736f..80298a9 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -167,6 +167,7 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 		ATQ_CMD_DECLARE_STI(CMD_AT_CNUM, cmd16),		/* Get Subscriber number */
+ 		ATQ_CMD_DECLARE_STI(CMD_AT_CVOICE, cmd17),	/* read the current voice mode, and return sampling rate、data bit、frame period */
+ 		ATQ_CMD_DECLARE_STI(CMD_AT_CVOICE2, cmd17a),
++		ATQ_CMD_DECLARE_DYNF(CMD_AT_QRXGAIN, RES_OK, ATQ_CMD_FLAG_IGNORE),	/* qrxgain (Aster): downlink digital gain, forgotten by the modem at every reset */
+ 		ATQ_CMD_DECLARE_ST(CMD_AT_CSCA, cmd6),		/* Get SMS Service center address */
+ //		ATQ_CMD_DECLARE_ST(CMD_AT_CLIP, cmd18),		/* disable  Calling line identification presentation in unsolicited response +CLIP: <number>,<type>[,<subaddr>,<satype>[,[<alpha>][,<CLI validitity>]] */
+ 		ATQ_CMD_DECLARE_ST(CMD_AT_CSSN, cmd19),		/* activate Supplementary Service Notification with CSSI and CSSU */
+@@ -184,6 +185,7 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 	int cgsn_passed = 0;
+ 	int err;
+ 	char * ptmp1 = NULL;
++	char * ptmp2 = NULL;
+ 	pvt_t * pvt = cpvt->pvt;
+ 	at_queue_cmd_t cmds[ITEMS_OF(st_cmds)];
+ 
+@@ -207,6 +209,8 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 			continue;
+ 		if(st_cmds[in].cmd == CMD_AT_U2DIAG && CONF_SHARED(pvt, u2diag) == -1)
+ 			continue;
++		if(st_cmds[in].cmd == CMD_AT_QRXGAIN && CONF_SHARED(pvt, qrxgain) < 0)
++			continue;
+ 		if(st_cmds[in].cmd == CMD_AT_CFUN_QUERY && CONF_SHARED(pvt, radio) == DC_RADIO_KEEP)
+ 			continue;
+ 		if(st_cmds[in].cmd == CMD_AT_CFUN_ON && CONF_SHARED(pvt, radio) != DC_RADIO_ON)
+@@ -225,6 +229,13 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 				goto failure;
+ 			ptmp1 = cmds[out].data;
+ 		}
++		if(cmds[out].cmd == CMD_AT_QRXGAIN)
++		{
++			err = at_fill_generic_cmd(&cmds[out], "AT+QRXGAIN=%d\r", CONF_SHARED(pvt, qrxgain));
++			if(err)
++				goto failure;
++			ptmp2 = cmds[out].data;
++		}
+ 		if(cmds[out].cmd == from_command)
+ 			begin = out;
+ 		out++;
+@@ -236,6 +247,8 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ failure:
+ 	if(ptmp1)
+ 		ast_free(ptmp1);
++	if(ptmp2)
++		ast_free(ptmp2);
+ 	return err;
+ }
+ 
+diff --git a/at_command.h b/at_command.h
+index a8eb9ac..67aa333 100644
+--- a/at_command.h
++++ b/at_command.h
+@@ -36,6 +36,7 @@
+ 	_( AT_CHUP,         "AT+CHUP") \
+ 	_( AT_CIMI,         "AT+CIMI") \
+ 	_( AT_CVOICE2,      "AT+CPCMREG?") \
++	_( AT_QRXGAIN,      "AT+QRXGAIN") \
+ 	_( AT_CLIR,         "AT+CLIR") \
+ \
+ 	_( AT_CLVL,         "AT+CLVL") \
+diff --git a/at_response.c b/at_response.c
+index b89e7a7..ee0ce80 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -296,6 +296,10 @@ static int at_response_ok (struct pvt* pvt, at_res_t res)
+ 				ast_debug (1, "[%s] Calling line indication disabled\n", PVT_ID(pvt));
+ 				break;
+ */
++			case CMD_AT_QRXGAIN:
++				ast_verb (3, "[%s] Downlink gain set: AT+QRXGAIN=%d\n", PVT_ID(pvt), CONF_SHARED(pvt, qrxgain));
++				break;
++
+ 			case CMD_AT_CSSN:
+ 				ast_debug (1, "[%s] Supplementary Service Notification enabled successful\n", PVT_ID(pvt));
+ 				break;
+@@ -574,6 +578,10 @@ static int at_response_error (struct pvt* pvt, at_res_t res, const char* str)
+ 				ast_debug (1, "[%s] No Quectel voice support\n", PVT_ID(pvt));
+ 				pvt->has_voice = 0;
+                                 break;
++			case CMD_AT_QRXGAIN:
++				ast_log (LOG_WARNING, "[%s] The modem refused AT+QRXGAIN=%d (qrxgain); its downlink gain is unchanged\n", PVT_ID(pvt), CONF_SHARED(pvt, qrxgain));
++				break;
++
+ 			case CMD_AT_CVOICE2:
+ 				ast_debug (1, "[%s] No Simcom voice support\n", PVT_ID(pvt));
+ 				pvt->is_simcom = 0;
+diff --git a/cli.c b/cli.c
+index 46359ff..07402f7 100644
+--- a/cli.c
++++ b/cli.c
+@@ -140,6 +140,7 @@ static char* cli_show_device_settings (struct ast_cli_entry* e, int cmd, struct
+ 		ast_cli (a->fd, "  Group                   : %d\n", CONF_SHARED(pvt, group));
+ 		ast_cli (a->fd, "  RX gain                 : %d\n", CONF_SHARED(pvt, rxgain));
+ 		ast_cli (a->fd, "  TX gain                 : %d\n", CONF_SHARED(pvt, txgain));
++		ast_cli (a->fd, "  QRXGAIN                 : %d\n", CONF_SHARED(pvt, qrxgain));
+ 		ast_cli (a->fd, "  U2Diag                  : %d\n", CONF_SHARED(pvt, u2diag));
+ 		ast_cli (a->fd, "  Use CallingPres         : %s\n", CONF_SHARED(pvt, usecallingpres) ? "Yes" : "No");
+ 		ast_cli (a->fd, "  Default CallingPres     : %s\n", CONF_SHARED(pvt, callingpres) < 0 ? "<Not set>" : ast_describe_caller_presentation (CONF_SHARED(pvt, callingpres)));
+diff --git a/dc_config.c b/dc_config.c
+index 7c67d87..48e3aec 100644
+--- a/dc_config.c
++++ b/dc_config.c
+@@ -104,6 +104,7 @@ EXPORT_DEF void dc_sconfig_fill_defaults(struct dc_sconfig * config)
+ 	ast_copy_string (config->language, DEFAULT_LANGUAGE, sizeof (config->language));
+ 
+ 	config->u2diag			= -1;
++	config->qrxgain			= -1;
+ 	config->resetquectel		=  1;
+ 	config->callingpres		= -1;
+ 	config->initstate		= DEV_STATE_STARTED;
+@@ -148,6 +149,16 @@ EXPORT_DEF void dc_sconfig_fill(struct ast_config * cfg, const char * cat, struc
+ 		{
+ 			config->txgain = (int) strtol (v->value, (char**) NULL, 10);		/* txgain is set to 0 if invalid */
+ 		}
++		else if (!strcasecmp (v->name, "qrxgain"))
++		{
++			/* the modem forgets it at every reset, so it is sent at every connect (Aster, docker/asterisk/patches/README.md) */
++			char * end = NULL;
++			long val = strtol (v->value, &end, 10);
++			if (end != v->value && *end == 0 && val >= 0 && val <= 65535)
++				config->qrxgain = (int) val;
++			else
++				ast_log(LOG_ERROR, "Invalid value for 'qrxgain': '%s', must be 0..65535 (AT+QRXGAIN) or absent\n", v->value);
++		}
+ 		else if (!strcasecmp (v->name, "u2diag"))
+ 		{
+ 			errno = 0;
+diff --git a/dc_config.h b/dc_config.h
+index 5592c9b..dc1c6b3 100644
+--- a/dc_config.h
++++ b/dc_config.h
+@@ -77,6 +77,7 @@ typedef struct dc_sconfig
+ 	int			group;				/*!< group number for group dialling 0 */
+ 	int			rxgain;				/*!< increase the incoming volume 0 */
+ 	int			txgain;				/*!< increase the outgoint volume 0 */
++	int			qrxgain;			/*!< Quectel downlink digital gain sent as AT+QRXGAIN=<n> at every initialization; -1 = not sent (Aster) */
+ 	int			u2diag;				/*!< -1 */
+ 	int			callingpres;			/*!< calling presentation */
+ 
+diff --git a/etc/quectel.conf b/etc/quectel.conf
+index a4b666f..07776db 100644
+--- a/etc/quectel.conf
++++ b/etc/quectel.conf
+@@ -65,6 +65,7 @@ callwaiting=auto		; if 'yes' allow incoming calls waiting; by default use networ
+ disable=no			; OBSOLETED by initstate: if 'yes' no load this device and just ignore this section
+ 
+ initstate=start			; specified initial state of device, must be one of 'stop' 'start' 'remote'
++;qrxgain=8192			; Quectel downlink digital gain, AT+QRXGAIN=<0..65535>, sent at every connect (the modem forgets it at a reset); absent = not sent
+ ;radio=keep			; radio at initialization: 'on' sends AT+CFUN=1 first, 'off' sends AT+CFUN=0 and then keeps the device connected and idle, 'keep' sends neither
+ 				;   'remove' same as 'disable=yes'
+ 
+diff --git a/manager.c b/manager.c
+index 4ee3015..24200c8 100644
+--- a/manager.c
++++ b/manager.c
+@@ -59,6 +59,7 @@ static int manager_show_devices (struct mansession* s, const struct message* m)
+ 			astman_append (s, "Group: %d\r\n", CONF_SHARED(pvt, group));
+ 			astman_append (s, "RXGain: %d\r\n", CONF_SHARED(pvt, rxgain));
+ 			astman_append (s, "TXGain: %d\r\n", CONF_SHARED(pvt, txgain));
++			astman_append (s, "QRXGain: %d\r\n", CONF_SHARED(pvt, qrxgain));
+ 			astman_append (s, "U2DIAG: %d\r\n", CONF_SHARED(pvt, u2diag));
+ 			astman_append (s, "UseCallingPres: %s\r\n", CONF_SHARED(pvt, usecallingpres) ? "Yes" : "No");
+ 			astman_append (s, "DefaultCallingPres: %s\r\n", CONF_SHARED(pvt, callingpres) < 0 ? "<Not set>" : ast_describe_caller_presentation (CONF_SHARED(pvt, callingpres)));

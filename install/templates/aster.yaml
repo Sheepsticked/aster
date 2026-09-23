@@ -1,0 +1,39 @@
+# Aster registry — modems, phones, ring groups, recipients and settings. Installed only if absent; the UI rewrites it
+# and does NOT keep comments. Schema and field rules are in the README.
+version: 1
+settings:
+  ui_language: en              # en | ru
+  timezone: Europe/Minsk       # display only
+  retention_days: { operations: 90, notifications: 90 }
+telegram:
+  default_recipients: []       # Telegram chat ids as strings, e.g. ["111222333"]; the bot token lives in secrets.env
+  alerts: false                # opt-in: modem down > 5 min / Asterisk unreachable > 2 min
+modems: []
+  # - id: gsm1                 # ^[a-z][a-z0-9_]{0,15}$; becomes the driver device name and ${GSM1}
+  #   driver: quectel          # quectel | dongle
+  #   imei: "490154203237534"  # 15 digits, unique
+  #   enabled: true            # -> radio on | off (a disabled modem is kept with its radio off)
+  #   uac: true                # quectel only -> quec_uac=1 + alsadev from usb_port
+  #   usb_port: "1-1.3"        # filled by Scan / Assign / remap
+  #   ring: ["504","505"]      # generated ring group (Assign fills it for gsm1/gsm2); ring_timeout: 120
+  #   incoming_context: null   # null = generated aster-ring-gsm1, or a custom context from extensions.conf
+  #   group: 1
+  #   recipients: null         # null = telegram.default_recipients
+# Starter phones: each secret is the phone's own number, so change them on the Phones page. All start internal only;
+# assigning modem gsm1 links 504-508 to it, gsm2 links 511-515. 509/510 use direct media.
+phones:
+  - { number: "501", secret: "501", outbound: null }
+  - { number: "502", secret: "502", outbound: null }
+  - { number: "503", secret: "503", outbound: null }
+  - { number: "504", secret: "504", outbound: null }
+  - { number: "505", secret: "505", outbound: null }
+  - { number: "506", secret: "506", outbound: null }
+  - { number: "507", secret: "507", outbound: null }
+  - { number: "508", secret: "508", outbound: null }
+  - { number: "509", secret: "509", outbound: null, direct_media: true }
+  - { number: "510", secret: "510", outbound: null, direct_media: true }
+  - { number: "511", secret: "511", outbound: null }
+  - { number: "512", secret: "512", outbound: null }
+  - { number: "513", secret: "513", outbound: null }
+  - { number: "514", secret: "514", outbound: null }
+  - { number: "515", secret: "515", outbound: null }

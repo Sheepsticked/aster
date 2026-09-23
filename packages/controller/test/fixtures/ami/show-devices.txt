@@ -1,0 +1,328 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 240
+LastReload: 0
+Status: Fully Booted
+
+Response: Success
+ActionID: ami-2
+EventList: start
+Message: Device status list will follow
+
+Event: QuectelDeviceEntry
+ActionID: ami-2
+Device: gsm_test
+AudioSetting: 
+DataSetting: 
+IMEISetting: 000000000000000
+IMSISetting: 
+ChannelLanguage: en
+Context: aster-in-gsm_test
+Exten: 
+Group: 1
+RXGain: 0
+TXGain: 0
+U2DIAG: -1
+UseCallingPres: No
+DefaultCallingPres: <Not set>
+AutoDeleteSMS: No
+DisableSMS: No
+ResetQuectel: Yes
+CallWaitingSetting: auto
+DTMF: relax
+MinimalDTMFGap: 45
+MinimalDTMFDuration: 80
+MinimalDTMFInterval: 200
+State: Stopped
+AudioState: 
+DataState: 
+Voice: No
+SMS: No
+Manufacturer: 
+Model: 
+Firmware: 
+IMEIState: 
+IMSIState: 
+GSMRegistrationStatus: Unknown
+RSSI: 0, <= -113 dBm
+Mode: No Service
+Submode: No service
+ProviderName: NONE
+LocationAreaCode: 
+CellID: 
+SubscriberNumber: Unknown
+SMSServiceCenter: 
+UseUCS2Encoding: No
+TasksInQueue: 0
+CommandsInQueue: 0
+CallWaitingState: Disabled
+CurrentDeviceState: stop
+DesiredDeviceState: stop
+CallsChannels: 0
+Active: 0
+Held: 0
+Dialing: 0
+Alerting: 0
+Incoming: 0
+Waiting: 0
+Releasing: 0
+Initializing: 0
+
+Event: QuectelDeviceEntry
+ActionID: ami-2
+Device: gsm_uac
+AudioSetting: plughw:CARD=q_1_1_3
+DataSetting: 
+IMEISetting: 000000000000002
+IMSISetting: 
+ChannelLanguage: en
+Context: aster-in-gsm_uac
+Exten: 
+Group: 0
+RXGain: 0
+TXGain: 0
+U2DIAG: -1
+UseCallingPres: No
+DefaultCallingPres: <Not set>
+AutoDeleteSMS: No
+DisableSMS: No
+ResetQuectel: Yes
+CallWaitingSetting: auto
+DTMF: relax
+MinimalDTMFGap: 45
+MinimalDTMFDuration: 80
+MinimalDTMFInterval: 200
+State: Stopped
+AudioState: plughw:CARD=q_1_1_3
+DataState: 
+Voice: No
+SMS: No
+Manufacturer: 
+Model: 
+Firmware: 
+IMEIState: 
+IMSIState: 
+GSMRegistrationStatus: Unknown
+RSSI: 0, <= -113 dBm
+Mode: No Service
+Submode: No service
+ProviderName: NONE
+LocationAreaCode: 
+CellID: 
+SubscriberNumber: Unknown
+SMSServiceCenter: 
+UseUCS2Encoding: No
+TasksInQueue: 0
+CommandsInQueue: 0
+CallWaitingState: Disabled
+CurrentDeviceState: stop
+DesiredDeviceState: stop
+CallsChannels: 0
+Active: 0
+Held: 0
+Dialing: 0
+Alerting: 0
+Incoming: 0
+Waiting: 0
+Releasing: 0
+Initializing: 0
+
+Event: QuectelDeviceEntry
+ActionID: ami-2
+Device: gsm_unmapped
+AudioSetting: 
+DataSetting: 
+IMEISetting: 000000000000003
+IMSISetting: 
+ChannelLanguage: en
+Context: aster-in-gsm_unmapped
+Exten: 
+Group: 0
+RXGain: 0
+TXGain: 0
+U2DIAG: -1
+UseCallingPres: No
+DefaultCallingPres: <Not set>
+AutoDeleteSMS: No
+DisableSMS: No
+ResetQuectel: Yes
+CallWaitingSetting: auto
+DTMF: relax
+MinimalDTMFGap: 45
+MinimalDTMFDuration: 80
+MinimalDTMFInterval: 200
+State: Stopped
+AudioState: 
+DataState: 
+Voice: No
+SMS: No
+Manufacturer: 
+Model: 
+Firmware: 
+IMEIState: 
+IMSIState: 
+GSMRegistrationStatus: Unknown
+RSSI: 0, <= -113 dBm
+Mode: No Service
+Submode: No service
+ProviderName: NONE
+LocationAreaCode: 
+CellID: 
+SubscriberNumber: Unknown
+SMSServiceCenter: 
+UseUCS2Encoding: No
+TasksInQueue: 0
+CommandsInQueue: 0
+CallWaitingState: Disabled
+CurrentDeviceState: stop
+DesiredDeviceState: stop
+CallsChannels: 0
+Active: 0
+Held: 0
+Dialing: 0
+Alerting: 0
+Incoming: 0
+Waiting: 0
+Releasing: 0
+Initializing: 0
+
+Event: QuectelShowDevicesComplete
+ActionID: ami-2
+EventList: Complete
+ListItems: 3
+
+Response: Success
+ActionID: ami-3
+EventList: start
+Message: Device status list will follow
+
+Event: DongleDeviceEntry
+ActionID: ami-3
+Device: gsm_dongle
+AudioSetting: 
+DataSetting: 
+IMEISetting: 000000000000001
+IMSISetting: 
+ChannelLanguage: en
+Context: aster-in-gsm_dongle
+Exten: 
+Group: 1
+RXGain: 0
+TXGain: 0
+U2DIAG: -1
+UseCallingPres: No
+DefaultCallingPres: <Not set>
+AutoDeleteSMS: No
+DisableSMS: No
+ResetDongle: Yes
+CallWaitingSetting: auto
+DTMF: relax
+MinimalDTMFGap: 45
+MinimalDTMFDuration: 80
+MinimalDTMFInterval: 200
+State: Stopped
+AudioState: 
+DataState: 
+Voice: No
+SMS: No
+Manufacturer: 
+Model: 
+Firmware: 
+IMEIState: 
+IMSIState: 
+GSMRegistrationStatus: Unknown
+RSSI: 0, <= -113 dBm
+Mode: No Service
+Submode: No service
+ProviderName: NONE
+LocationAreaCode: 
+CellID: 
+SubscriberNumber: Unknown
+SMSServiceCenter: 
+TasksInQueue: 0
+CommandsInQueue: 0
+CallWaitingState: Disabled
+CurrentDeviceState: stop
+DesiredDeviceState: stop
+CallsChannels: 0
+Active: 0
+Held: 0
+Dialing: 0
+Alerting: 0
+Incoming: 0
+Waiting: 0
+Releasing: 0
+Initializing: 0
+
+Event: DongleDeviceEntry
+ActionID: ami-3
+Device: gsm_ports
+AudioSetting: /dev/ttyUSB8
+DataSetting: /dev/ttyUSB9
+IMEISetting: 
+IMSISetting: 
+ChannelLanguage: en
+Context: aster-in-gsm_ports
+Exten: 
+Group: 0
+RXGain: 0
+TXGain: 0
+U2DIAG: -1
+UseCallingPres: No
+DefaultCallingPres: <Not set>
+AutoDeleteSMS: No
+DisableSMS: No
+ResetDongle: Yes
+CallWaitingSetting: auto
+DTMF: relax
+MinimalDTMFGap: 45
+MinimalDTMFDuration: 80
+MinimalDTMFInterval: 200
+State: Stopped
+AudioState: 
+DataState: 
+Voice: No
+SMS: No
+Manufacturer: 
+Model: 
+Firmware: 
+IMEIState: 
+IMSIState: 
+GSMRegistrationStatus: Unknown
+RSSI: 0, <= -113 dBm
+Mode: No Service
+Submode: No service
+ProviderName: NONE
+LocationAreaCode: 
+CellID: 
+SubscriberNumber: Unknown
+SMSServiceCenter: 
+TasksInQueue: 0
+CommandsInQueue: 0
+CallWaitingState: Disabled
+CurrentDeviceState: stop
+DesiredDeviceState: stop
+CallsChannels: 0
+Active: 0
+Held: 0
+Dialing: 0
+Alerting: 0
+Incoming: 0
+Waiting: 0
+Releasing: 0
+Initializing: 0
+
+Event: DongleShowDevicesComplete
+ActionID: ami-3
+EventList: Complete
+ListItems: 2
+
+Response: Goodbye
+ActionID: ami-4
+Message: Thanks for all the fish.
+

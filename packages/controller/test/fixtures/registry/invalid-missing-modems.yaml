@@ -1,0 +1,3 @@
+# invalid: the modems key is missing (a truncated or hand-emptied file must not read as "no modems")
+version: 1
+phones: []

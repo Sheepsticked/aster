@@ -1,0 +1,14 @@
+; discovered device
+[dc_5160_4321](defaults)
+;audio=/dev/ttyUSB1
+;data=/dev/ttyUSB2
+imei=490154203237518
+imsi=257020123454321
+
+; discovered device
+[dc__](defaults)
+;audio=/dev/ttyUSB4
+;data=/dev/ttyUSB5
+imei=;
+imsi=AT+GSN;
+

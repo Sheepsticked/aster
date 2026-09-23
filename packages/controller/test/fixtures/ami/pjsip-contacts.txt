@@ -1,0 +1,43 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 10
+LastReload: 10
+Status: Fully Booted
+
+Response: Success
+ActionID: ami-2
+EventList: start
+Message: A listing of Contacts follows, presented as ContactList events
+
+Event: ContactList
+ActionID: ami-2
+ObjectType: contact
+ObjectName: 599;@4bede270539ffd156f2bdb0e28864763
+ViaAddr: 172.17.0.1
+QualifyTimeout: 3.000000
+Qualify2xxOnly: false
+CallId: d3999123fa6768ee@aster-test
+RegServer: 
+PruneOnBoot: no
+Path: 
+Endpoint: 599
+ViaPort: 47603
+AuthenticateQualify: no
+Uri: sip:599@172.17.0.1:47603
+QualifyFrequency: 0
+UserAgent: aster-sorcery-test
+ExpirationTime: 1790011952
+OutboundProxy: 
+Status: NonQualified
+RoundtripUsec: N/A
+
+Event: ContactListComplete
+ActionID: ami-2
+EventList: Complete
+ListItems: 1
+

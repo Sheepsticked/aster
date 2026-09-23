@@ -1,0 +1,25 @@
+{
+  "_comment": "sysfs of a host with a Huawei E173 (12d1:1436) on port 1-1 and a Quectel EC25-EUX (2c7c:0125) on port 1-2, both without SIM, from readlink -f /sys/class/tty/ttyUSB*/device and the idVendor/idProduct/product files of /sys/bus/usb/devices/*. The E173 exposes its ttys on interfaces 0, 3 (audio) and 4 (data); the EC25-EUX on 0–3 (audio if1, AT/data if2); its interface 4 is the network function. test/sysfs-fake.js builds this tree under a temporary directory.",
+  "usb": "platform/axi/1000120000.pcie/1f00200000.usb/xhci-hcd.0",
+  "devices": [
+    { "port": "usb1", "path": "usb1", "idVendor": "1d6b", "idProduct": "0002", "product": "xHCI Host Controller" },
+    { "port": "usb2", "path": "usb2", "idVendor": "1d6b", "idProduct": "0003", "product": "xHCI Host Controller" },
+    { "port": "1-1", "path": "usb1/1-1", "idVendor": "12d1", "idProduct": "1436", "product": "HUAWEI Mobile" },
+    { "port": "1-2", "path": "usb1/1-2", "idVendor": "2c7c", "idProduct": "0125", "product": "EC25-EUX" }
+  ],
+  "interfaces": ["usb1/1-1/1-1:1.0", "usb1/1-1/1-1:1.1", "usb1/1-1/1-1:1.2", "usb1/1-1/1-1:1.3", "usb1/1-1/1-1:1.4", "usb1/1-1/1-1:1.5", "usb1/1-1/1-1:1.6",
+    "usb1/1-2/1-2:1.0", "usb1/1-2/1-2:1.1", "usb1/1-2/1-2:1.2", "usb1/1-2/1-2:1.3", "usb1/1-2/1-2:1.4"],
+  "ttys": {
+    "ttyUSB0": "usb1/1-1/1-1:1.0/ttyUSB0",
+    "ttyUSB1": "usb1/1-1/1-1:1.3/ttyUSB1",
+    "ttyUSB2": "usb1/1-1/1-1:1.4/ttyUSB2",
+    "ttyUSB3": "usb1/1-2/1-2:1.0/ttyUSB3",
+    "ttyUSB4": "usb1/1-2/1-2:1.1/ttyUSB4",
+    "ttyUSB5": "usb1/1-2/1-2:1.2/ttyUSB5",
+    "ttyUSB6": "usb1/1-2/1-2:1.3/ttyUSB6"
+  },
+  "modems": {
+    "e173": { "port": "1-1", "driver": "dongle", "data": "/dev/ttyUSB2", "audio": "/dev/ttyUSB1", "imei": "356938031234560" },
+    "ec25": { "port": "1-2", "driver": "quectel", "data": "/dev/ttyUSB5", "audio": "/dev/ttyUSB4", "imei": "490154203237518" }
+  }
+}

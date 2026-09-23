@@ -1,0 +1,81 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 42
+LastReload: 42
+Status: Fully Booted
+
+Response: Success
+ActionID: ami-2
+Message: [gsm_dongle] SMS queued for send
+
+Event: DongleReport
+Privilege: call,all
+Device: gsm_dongle
+Payload: out-1
+SCTS: 
+DT: 
+Success: 1
+Type: 0
+Report: 
+
+Response: Success
+ActionID: ami-3
+Message: [gsm_dongle] SMS queued for send
+
+Event: DongleNewCMGR
+Privilege: call,all
+Device: gsm_dongle
+Message: +CMGR: 0,,25\r\n07919730071111F106A60B919730071111F162909031500021629090315000210000
+
+Event: DongleReport
+Privilege: call,all
+Device: gsm_dongle
+Payload: out-2
+SCTS: 2026-09-10 09:30:05 +03:00
+DT: 2026-09-10 09:30:07 +03:00
+Success: 1
+Type: 1
+Report: 000,
+
+Response: Success
+ActionID: ami-4
+Message: [gsm_dongle] SMS queued for send
+
+Event: DongleReport
+Privilege: call,all
+Device: gsm_dongle
+Payload: out-3
+SCTS: 
+DT: 
+Success: 0
+Type: 2
+Report: 
+
+Event: DongleNewSMS
+Privilege: call,all
+Device: gsm_dongle
+From: +375290000001
+LineCount: 2
+MessageLine0: Привет
+MessageLine1:  из Aster
+
+
+Event: DongleNewSMSBase64
+Privilege: call,all
+Device: gsm_dongle
+From: +375290000001
+Message: 0J/RgNC40LLQtdGCCiDQuNC3IEFzdGVy
+
+Response: Error
+ActionID: ami-5
+Message: [gsm_x] Device disconnected
+
+Response: Goodbye
+ActionID: ami-6
+Message: Thanks for all the fish.
+

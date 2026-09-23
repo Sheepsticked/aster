@@ -1,0 +1,10 @@
+# Aster — udev rules: keep ModemManager off the modems; name Quectel UAC sound cards by USB port.
+# Installed to /etc/udev/rules.d/90-aster.rules by install.sh; helper at /usr/local/lib/aster/alsa-name.
+
+# ModemManager must not touch Quectel (2c7c) or Huawei (12d1) modems — the Asterisk drivers own them. The flag goes on
+# the USB device and on every port, not only the ttys.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2c7c|12d1", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty|usbmisc|net", ATTRS{idVendor}=="2c7c|12d1", ENV{ID_MM_PORT_IGNORE}="1", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+# Quectel USB audio class card: deterministic ALSA id derived from the USB port path (q_1_1_3 for port 1-1.3).
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="card[0-9]*", ATTRS{idVendor}=="2c7c", PROGRAM="/usr/local/lib/aster/alsa-name %p", ATTR{id}="%c"

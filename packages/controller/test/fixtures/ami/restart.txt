@@ -1,0 +1,11 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 267
+LastReload: 26
+Status: Fully Booted
+

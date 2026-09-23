@@ -1,0 +1,12 @@
+; Aster — AMI, rendered by install.sh into config/asterisk/manager.conf (0600) with the secret from secrets.env.
+; Do not edit it: install.sh rewrites it. Bound to 127.0.0.1, so only the controller on this host can reach AMI.
+[general]
+enabled = yes
+port = 5038
+bindaddr = 127.0.0.1
+displayconnects = no
+
+[aster]
+secret = @ASTER_AMI_SECRET@
+read = system,call,command,reporting,user
+write = system,call,command,reporting,originate

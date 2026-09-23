@@ -1,0 +1,203 @@
+# Builds the Asterisk image for amd64 and arm64, checks that both driver modules load and register their AMI actions,
+# runs docker/asterisk/smoke-test.sh against each, and runs the controller's AMI, apply, devices, SMS and AT
+# integration tests against a live container. The standalone image (asterisk-dongle-quectel) must boot bare without
+# Aster. A second, informational job tries the build against a newer Asterisk.
+name: asterisk-image
+on:
+  push:
+    paths: ['docker/asterisk/**', '.github/workflows/asterisk-image.yml', 'packages/controller/src/ami/**',
+      'packages/controller/test/ami-integration.test.js', 'packages/controller/package.json', 'package-lock.json']
+  pull_request:
+    paths: ['docker/asterisk/**', '.github/workflows/asterisk-image.yml', 'packages/controller/src/ami/**',
+      'packages/controller/test/ami-integration.test.js', 'packages/controller/package.json', 'package-lock.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: build + smoke test (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            timeout: 60
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            timeout: 120
+    env:
+      IMAGE: aster/aster-asterisk:ci-${{ matrix.arch }}
+      STANDALONE: aster/asterisk-dongle-quectel:ci-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: docker/asterisk
+          target: aster
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha,scope=asterisk-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=asterisk-${{ matrix.arch }}
+      - name: Build the standalone image
+        uses: docker/build-push-action@v7
+        with:
+          context: docker/asterisk
+          target: asterisk-dongle-quectel
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.STANDALONE }}
+          cache-from: type=gha,scope=asterisk-${{ matrix.arch }}
+      - name: Pins baked into the image
+        run: docker image inspect "$IMAGE" --format '{{json .Config.Labels}}'
+      - name: Bare image (built-in defaults) loads the drivers and their AMI actions
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          docker run -d --name bare --platform "$PLATFORM" "$IMAGE"
+          for _ in $(seq 1 150); do
+            docker exec bare asterisk -rx 'core waitfullybooted' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec bare asterisk -rx 'core show version'
+          out=$(docker exec bare asterisk -rx 'module show like chan_')
+          echo "$out"
+          for m in chan_pjsip.so chan_dongle.so chan_quectel.so; do
+            echo "$out" | grep -E "^$m .* Running" >/dev/null || { echo "::error::$m is not Running"; exit 1; }
+          done
+          out=$(docker exec bare asterisk -rx 'manager show commands')
+          for a in DongleSendSMS QuectelSendSMS DongleShowDevices QuectelShowDevices DongleAtCommand QuectelAtCommand; do
+            echo "$out" | grep -qw "$a" || { echo "::error::AMI action $a missing"; exit 1; }
+          done
+      - name: Bare image log
+        if: always()
+        run: |
+          docker logs bare 2>&1 | tail -n 100 || true
+          docker rm -f bare || true
+      - name: Standalone image boots bare with both drivers, no warnings and nothing of Aster
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          docker run -d --name standalone --platform "$PLATFORM" "$STANDALONE"
+          for _ in $(seq 1 150); do
+            docker exec standalone asterisk -rx 'core waitfullybooted' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          out=$(docker exec standalone asterisk -rx 'module show like chan_')
+          echo "$out"
+          for m in chan_pjsip.so chan_dongle.so chan_quectel.so; do
+            echo "$out" | grep -E "^$m .* Running" >/dev/null || { echo "::error::$m is not Running"; exit 1; }
+          done
+          out=$(docker exec standalone asterisk -rx 'manager show commands')
+          for a in DongleAtCommand QuectelAtCommand; do
+            echo "$out" | grep -qw "$a" || { echo "::error::AMI action $a missing"; exit 1; }
+          done
+          docker exec standalone sh -c '! [ -e /usr/local/bin/aster-emit ] && ! [ -e /var/spool/aster ]' ||
+            { echo "::error::the standalone image carries Aster files"; exit 1; }
+          if docker logs standalone 2>&1 | grep -E 'WARNING|ERROR'; then
+            echo "::error::the starter files boot with warnings"; exit 1
+          fi
+      - name: Standalone image log
+        if: always()
+        run: |
+          docker logs standalone 2>&1 | tail -n 100 || true
+          docker rm -f standalone || true
+      - name: Smoke test (test-config)
+        env:
+          SMOKE_SPOOL_OUT: ${{ runner.temp }}/smoke-spool
+        run: docker/asterisk/smoke-test.sh "$IMAGE"
+      - name: Keep the event files written by the smoke test (input for the ingester tests)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-spool-${{ matrix.arch }}
+          path: ${{ runner.temp }}/smoke-spool
+          if-no-files-found: warn
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0   # the controller image's Node (docker/controller/Dockerfile)
+      - name: AMI client integration test against the image (test-config, AMI on 127.0.0.1:5038)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          docker run -d --name ami --platform "$PLATFORM" -p 127.0.0.1:5038:5038 \
+            --mount "type=bind,source=$PWD/docker/asterisk/test-config,target=/etc/asterisk,readonly" \
+            --mount type=tmpfs,target=/var/lib/asterisk --mount type=tmpfs,target=/var/spool/aster,tmpfs-mode=0755 \
+            --mount type=tmpfs,target=/var/log/asterisk "$IMAGE"
+          for _ in $(seq 1 150); do
+            docker exec ami asterisk -rx 'core waitfullybooted' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          npm ci
+          ASTER_AMI_TEST=1 npm test -w packages/controller -- --test-name-pattern 'ami integration'
+      - name: AMI integration container log
+        if: always()
+        run: |
+          docker logs ami 2>&1 | tail -n 100 || true
+          docker rm -f ami || true
+      - name: Config apply integration test against the image (writable test-config copy, AMI on 127.0.0.1:5039)
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          APPLY_HOME: ${{ runner.temp }}/apply-home
+        run: |
+          mkdir -p "$APPLY_HOME/config" "$APPLY_HOME/logs/asterisk" "$APPLY_HOME/state"
+          cp -r docker/asterisk/test-config "$APPLY_HOME/config/asterisk"
+          docker run -d --name apply --platform "$PLATFORM" -p 127.0.0.1:5039:5038 \
+            --mount "type=bind,source=$APPLY_HOME/config/asterisk,target=/etc/asterisk" \
+            --mount "type=bind,source=$APPLY_HOME/logs/asterisk,target=/var/log/asterisk" \
+            --mount type=tmpfs,target=/var/lib/asterisk --mount type=tmpfs,target=/var/spool/aster,tmpfs-mode=0755 "$IMAGE"
+          for _ in $(seq 1 150); do
+            docker exec apply asterisk -rx 'core waitfullybooted' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          ASTER_AMI_TEST=1 ASTER_AMI_PORT=5039 ASTER_APPLY_HOME="$APPLY_HOME" npm test -w packages/controller -- --test-name-pattern 'apply integration'
+          # the device operations against the same container, after the apply test (both change the generated files)
+          ASTER_AMI_TEST=1 ASTER_AMI_PORT=5039 ASTER_APPLY_HOME="$APPLY_HOME" npm test -w packages/controller -- --test-name-pattern 'devices integration'
+          # the outbox against the same container (SendSMS to the stopped devices → the drivers' refusals)
+          ASTER_AMI_TEST=1 ASTER_AMI_PORT=5039 ASTER_APPLY_HOME="$APPLY_HOME" npm test -w packages/controller -- --test-name-pattern 'sms integration'
+          # the AT, forwarding and USSD operations against the same container (AtCommand/SendUSSD to the stopped devices → the drivers' refusals)
+          ASTER_AMI_TEST=1 ASTER_AMI_PORT=5039 ASTER_APPLY_HOME="$APPLY_HOME" npm test -w packages/controller -- --test-name-pattern 'at integration'
+      - name: Apply integration container log
+        if: always()
+        run: |
+          docker logs apply 2>&1 | tail -n 100 || true
+          docker rm -f apply || true
+
+  asterisk-22:
+    name: informational — Asterisk 22 build + smoke test (linux/amd64, may fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    continue-on-error: true
+    env:
+      ASTERISK_VERSION: 22.11.0
+      ASTERISK_SHA256: 3bd5ee040509a3d3cd9b1ba9520c18e6ec0a7e7981ca68c457dcd36ba3c54d94   # official asterisk-22.11.0.sha256
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build with Asterisk ${{ env.ASTERISK_VERSION }}
+        shell: bash
+        run: |
+          docker buildx build --load --progress=plain \
+            --build-arg ASTERISK_VERSION="$ASTERISK_VERSION" --build-arg ASTERISK_SHA256="$ASTERISK_SHA256" \
+            -t aster/aster-asterisk:ci-22 docker/asterisk 2>&1 | tee asterisk-22-build.log
+      - name: Smoke test with Asterisk ${{ env.ASTERISK_VERSION }}
+        shell: bash
+        run: docker/asterisk/smoke-test.sh aster/aster-asterisk:ci-22 2>&1 | tee asterisk-22-smoke.log
+      - name: Upload the Asterisk 22 logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asterisk-22-logs
+          path: |
+            asterisk-22-build.log
+            asterisk-22-smoke.log
+          if-no-files-found: warn

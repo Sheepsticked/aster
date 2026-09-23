@@ -1,0 +1,217 @@
+# Aster role tasks: put the sources on the host, run install.sh, ask doctor.sh whether the result is healthy.
+#
+# install.sh is the only writer under aster_home: no synchronize, no delete, no file module pointed at that tree.
+---
+- name: The variables have to make sense before anything is written
+  ansible.builtin.assert:
+    that:
+      - aster_source in ['local', 'git']
+      - aster_image_source in ['build', 'pull']
+      - aster_sd_tuning | string | lower in ['auto', 'true', 'false']
+      - aster_http_port | int > 0
+      - aster_home | length > 1
+      - aster_repo_dest | length > 1
+      - aster_repo_dest | regex_replace('/$', '') != aster_home | regex_replace('/$', '')
+    fail_msg: >-
+      check the role variables: aster_source={{ aster_source }}, aster_image_source={{ aster_image_source }},
+      aster_sd_tuning={{ aster_sd_tuning }}, aster_http_port={{ aster_http_port }},
+      aster_home={{ aster_home }}, aster_repo_dest={{ aster_repo_dest }} (the sources and the appliance
+      cannot be the same directory).
+    quiet: true
+
+- name: Look for an installation that is already there
+  ansible.builtin.stat:
+    path: "{{ aster_home }}/config/secrets.env"
+  register: aster_secrets_file
+
+# install.sh --non-interactive refuses a first install with no password, but it would refuse it halfway through, after
+# the tree and the templates were written. Saying it here costs nothing and leaves the host untouched.
+- name: A first install has to be given an admin password
+  ansible.builtin.assert:
+    that: aster_admin_password | length > 0
+    fail_msg: >-
+      {{ aster_home }}/config/secrets.env does not exist on {{ inventory_hostname }}, so this is a first install and
+      there is no password to keep: set aster_admin_password (ansible-vault create group_vars/aster/vault.yml).
+    quiet: true
+  when: not aster_secrets_file.stat.exists
+
+# root's, because root runs install.sh from it; ownership is set only when the play is privileged.
+- name: The directory the sources go into
+  ansible.builtin.file:
+    path: "{{ aster_repo_dest }}"
+    state: directory
+    owner: "{{ 'root' if aster_become | default(true) | bool else omit }}"
+    group: "{{ 'root' if aster_become | default(true) | bool else omit }}"
+    mode: "0755"
+
+# ---- the sources -------------------------------------------------------------------------------------------------
+
+- name: Send this checkout to {{ inventory_hostname }}
+  when: aster_source == 'local'
+  block:
+    # Both control-machine steps also run in check mode, so `--check` has a tarball to compare the appliance against.
+    - name: A temporary file on the control machine for the packed sources
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .tar.gz
+        prefix: aster-source.
+      register: aster_pack
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+      changed_when: false
+
+    # Deterministic (sorted, fixed mtime, root owner), so `unarchive` reports a change only when there is one.
+    # `git ls-files` ships the tracked files from the working tree; a source that is not a git checkout uses plain tar.
+    - name: Pack the checkout
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          src={{ aster_src | quote }}
+          out={{ aster_pack.path | quote }}
+          cd "$src"
+          if [ -d .git ] && command -v git >/dev/null 2>&1; then
+            epoch=$(git log -1 --format=%ct)
+            git ls-files -z | tar --null -T - --sort=name --owner=root:0 --group=root:0 --numeric-owner \
+              --mtime="@$epoch" -czf "$out"
+            git describe --always --dirty 2>/dev/null || git rev-parse --short HEAD
+          else
+            tar --sort=name --owner=root:0 --group=root:0 --numeric-owner \
+              --exclude=./.git --exclude=./node_modules --exclude=./packages/ui/dist \
+              --exclude=./packages/ui/test-results --exclude=./packages/ui/playwright-report \
+              -czf "$out" .
+            echo "not a git checkout"
+          fi
+      register: aster_packed
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+      changed_when: false
+
+    - name: Unpack it into {{ aster_repo_dest }}
+      ansible.builtin.unarchive:
+        src: "{{ aster_pack.path }}"
+        dest: "{{ aster_repo_dest }}"
+
+    - name: The source revision now on the host
+      ansible.builtin.debug:
+        msg: "{{ aster_repo_dest }} ← {{ aster_src }} ({{ aster_packed.stdout_lines | last | default('unknown') }})"
+  always:
+    - name: Remove the packed sources from the control machine
+      ansible.builtin.file:
+        path: "{{ aster_pack.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+      changed_when: false
+      when: aster_pack.path is defined
+
+- name: Clone {{ aster_git_url }} at {{ aster_git_version }} on the host
+  ansible.builtin.git:
+    repo: "{{ aster_git_url }}"
+    dest: "{{ aster_repo_dest }}"
+    version: "{{ aster_git_version }}"
+    force: false        # a local change is an error, not something to throw away silently
+  when: aster_source == 'git'
+
+# ---- the installer -----------------------------------------------------------------------------------------------
+
+- name: Install Aster
+  block:
+    # The secrets go into 0600 files for the length of the run, never the environment (-vvv, /proc/<pid>/environ).
+    # None of these tasks report `changed`: the files are gone again when the run ends.
+    - name: A private file for the admin password
+      ansible.builtin.tempfile:
+        state: file
+        prefix: aster-admin-password.
+      register: aster_password_file
+      changed_when: false
+      when: aster_admin_password | length > 0
+
+    - name: Put the admin password in it
+      ansible.builtin.copy:
+        content: "{{ aster_admin_password }}"
+        dest: "{{ aster_password_file.path }}"
+        mode: "0600"
+      no_log: true
+      changed_when: false
+      # Only when a file was made for it (not in check mode: a dry run writes no secret).
+      when: aster_password_file.path is defined
+
+    - name: A private file for the Telegram bot token
+      ansible.builtin.tempfile:
+        state: file
+        prefix: aster-telegram-token.
+      register: aster_token_file
+      changed_when: false
+      when: aster_telegram_token | length > 0
+
+    - name: Put the Telegram bot token in it
+      ansible.builtin.copy:
+        content: "{{ aster_telegram_token }}"
+        dest: "{{ aster_token_file.path }}"
+        mode: "0600"
+      no_log: true
+      changed_when: false
+      when: aster_token_file.path is defined
+
+    # "changed" is install.sh's own CHANGED=<n> line; exiting without printing it is a failure.
+    - name: Run install.sh (the single source of truth for the host)
+      ansible.builtin.command:
+        argv: "{{ [aster_repo_dest ~ '/install/install.sh'] + aster_install_flags }}"
+        chdir: "{{ aster_repo_dest }}"
+      vars:
+        aster_install_flags: >-
+          {{ ['--non-interactive',
+              '--home', aster_home,
+              '--http-port', aster_http_port | string,
+              '--' ~ aster_image_source]
+             + (['--install-docker'] if aster_install_docker | bool else [])
+             + (['--rebuild'] if aster_rebuild | bool else [])
+             + ([] if aster_start | bool else ['--skip-up'])
+             + ({'auto': [], 'true': ['--sd-tuning'], 'false': ['--no-sd-tuning']}[aster_sd_tuning | string | lower]) }}
+      environment:
+        ASTER_VERSION: "{{ aster_version }}"
+        ASTER_IMAGE_NS: "{{ aster_image_ns }}"
+        ASTER_ADMIN_PASSWORD_FILE: "{{ aster_password_file.path | default('') }}"
+        ASTER_TELEGRAM_TOKEN_FILE: "{{ aster_token_file.path | default('') }}"
+      register: aster_install
+      changed_when: >-
+        (aster_install.stdout_lines | select('match', '^CHANGED=[0-9]+$') | list | last | default('CHANGED=?'))
+        != 'CHANGED=0'
+      # `rc` has a default: a command that never started (a wrong aster_repo_dest) has none.
+      failed_when: >-
+        aster_install.rc | default(1) != 0
+        or (aster_install.stdout_lines | default([]) | select('match', '^CHANGED=[0-9]+$') | list | length) == 0
+  always:
+    - name: Remove the secret files again
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      changed_when: false
+      loop:
+        - "{{ aster_password_file.path | default('') }}"
+        - "{{ aster_token_file.path | default('') }}"
+      when: item | length > 0
+      loop_control:
+        label: "{{ item }}"
+
+# Show what install.sh did when it changed something.
+- name: What install.sh did
+  ansible.builtin.debug:
+    var: aster_install.stdout_lines
+  when: aster_install.changed | default(false)
+
+- name: Ask the appliance how it is (doctor.sh)
+  ansible.builtin.command:
+    argv: ["{{ aster_repo_dest }}/install/bin/doctor.sh", "--home", "{{ aster_home }}", "--write-seconds", "0"]
+  register: aster_doctor_run
+  changed_when: false
+  failed_when: aster_doctor_run.rc != 0
+  when:
+    - aster_doctor | bool
+    - aster_start | bool

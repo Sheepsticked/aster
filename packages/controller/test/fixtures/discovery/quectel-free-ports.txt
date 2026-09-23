@@ -1,0 +1,7 @@
+; discovered device
+[dc_5160_](defaults)
+;audio=/dev/ttyUSB4
+;data=/dev/ttyUSB5
+imei=490154203237518
+imsi=
+

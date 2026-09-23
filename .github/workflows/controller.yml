@@ -1,0 +1,146 @@
+# Type-check and unit tests for the controller, a Vite build of the web UI checked at phone and desktop widths with
+# Playwright, then the controller image built for amd64 and arm64 and booted once so that the API answers and the SPA
+# is served.
+name: controller
+on:
+  push:
+    paths: ['packages/**', 'docker/controller/**', 'package.json', 'package-lock.json', 'jsconfig.json', '.dockerignore', '.github/workflows/controller.yml',
+      'docker/asterisk/test-config/**', 'docker/asterisk/test-registry.yaml', 'docker/asterisk/rootfs/etc/asterisk/**',
+      'docker/asterisk/smoke-test.sh', 'install/udev/alsa-name', 'tools/**']
+  pull_request:
+    paths: ['packages/**', 'docker/controller/**', 'package.json', 'package-lock.json', 'jsconfig.json', '.dockerignore', '.github/workflows/controller.yml',
+      'docker/asterisk/test-config/**', 'docker/asterisk/test-registry.yaml', 'docker/asterisk/rootfs/etc/asterisk/**',
+      'docker/asterisk/smoke-test.sh', 'install/udev/alsa-name', 'tools/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0   # the image's Node (docker/controller/Dockerfile); node:sqlite needs >= 24.15
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  ui:
+    name: UI build + responsive
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0   # the image's Node, which also builds the UI stage of docker/controller/Dockerfile
+      - run: npm ci
+      - run: npm run build -w packages/ui
+      # Chromium only: the two projects of playwright.config.js are a phone and a desktop, both Chromium.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:responsive -w packages/ui
+      - name: Keep the screenshots of both layouts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screens
+          path: packages/ui/test-results/screens
+          if-no-files-found: error
+
+  image:
+    name: image + index.js --check (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      IMAGE: aster/aster-controller:ci-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/controller/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: ${{ env.IMAGE }}
+      - name: index.js --check in the image, as root, against an empty ASTER_HOME
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          test "$(docker run --rm --platform "$PLATFORM" "$IMAGE" id -u)" = 0
+          home=$(mktemp -d)
+          mkdir -p "$home/config" "$home/state"
+          touch "$home/config/secrets.env"
+          docker run --rm --platform "$PLATFORM" -v "$home:/srv/aster" "$IMAGE" node packages/controller/src/index.js --check | tee check.out
+          sudo test -s "$home/state/aster.db"
+          for t in calls devices_seen events messages modem_forwarding notifications operations sessions settings sms_attempts sms_outbox; do
+            grep -qx "$t" check.out || { echo "::error::table $t missing from the --check output"; exit 1; }
+          done
+      # the API of the running image — the password set by bin/passwd.js, health without a session, a session for everything else.
+      - name: the HTTP API answers in the image
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          NAME: api-${{ matrix.arch }}
+        run: |
+          home=$(mktemp -d)
+          mkdir -p "$home/config" "$home/state"
+          printf '# Aster secrets\n' > "$home/config/secrets.env"
+          docker run --rm --platform "$PLATFORM" -e ASTER_ADMIN_PASSWORD=a-long-enough-password -v "$home:/srv/aster" "$IMAGE" \
+            node packages/controller/bin/passwd.js
+          docker run -d --name "$NAME" --platform "$PLATFORM" -p 127.0.0.1:8088:80 -v "$home:/srv/aster" "$IMAGE"
+          for _ in $(seq 1 60); do curl -fsS http://127.0.0.1:8088/api/health >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:8088/api/health | tee health.json
+          grep -q '"status":"degraded"' health.json   # no AMI in this container
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8088/api/overview)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' \
+            -d '{"password":"wrong"}' http://127.0.0.1:8088/api/login)" = 401
+          curl -fsS -c cookies -X POST -H 'content-type: application/json' \
+            -d '{"password":"a-long-enough-password"}' http://127.0.0.1:8088/api/login
+          curl -fsS -b cookies http://127.0.0.1:8088/api/overview | grep -q '"modems":\[\]'
+          # every resource route answers, and the backup is a gzip stream that tar can list
+          for path in modems phones messages calls notifications operations 'config/files' 'scan/latest' 'logs/controller'; do
+            test "$(curl -s -o /dev/null -w '%{http_code}' -b cookies "http://127.0.0.1:8088/api/$path")" = 200 || { echo "$path failed"; exit 1; }
+          done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -b cookies -X POST -H 'content-type: application/json' \
+            -d '{"id":"gsm1","driver":"quectel","imei":"nonsense"}' http://127.0.0.1:8088/api/modems)" = 400
+          curl -fsS -b cookies -o backup.tar.gz http://127.0.0.1:8088/api/backup
+          tar tzf backup.tar.gz | tee backup.list
+          grep -q 'state/aster.db' backup.list
+          grep -q 'config/secrets.env' backup.list
+          docker run --rm --platform "$PLATFORM" -v "$home:/srv/aster" "$IMAGE" node packages/controller/bin/backup.js
+          sudo ls -l "$home/backups" | tee backups.list
+          grep -qE 'aster-[0-9]{8}T[0-9]{6}Z\.tar\.gz' backups.list
+          # the SPA the image built in its UI stage is what a browser gets, index.html for a path the router owns and the
+          # hashed asset with the cache header that makes a reload cheap.
+          curl -fsS -o index.html -D index.head http://127.0.0.1:8088/
+          grep -q '<div id="app">' index.html
+          grep -qi '^cache-control: no-store' index.head
+          asset=$(grep -o '/assets/[A-Za-z0-9._-]*\.js' index.html | head -1)
+          test -n "$asset"
+          curl -fsS -D asset.head -o asset.js "http://127.0.0.1:8088$asset"
+          grep -qi '^cache-control: public, max-age=3600' asset.head
+          curl -fsS http://127.0.0.1:8088/modems | grep -q '<div id="app">'
+          docker logs "$NAME" 2>&1 | tee api.log
+          grep -q '"msg":"ready"' api.log
+          # `! grep` would be skipped by errexit (SC2251), so the log checks are explicit failures.
+          if grep -q '"level":"error"' api.log; then echo 'the controller logged an error'; exit 1; fi
+          if grep -q 'no web UI in this build' api.log; then echo 'the image has no UI'; exit 1; fi
+          docker rm -f "$NAME"

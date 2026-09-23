@@ -1,0 +1,229 @@
+# Builds both images natively for amd64 and arm64 and publishes them to Docker Hub as `latest` (plus the standalone
+# asterisk-dongle-quectel image and its description); per-architecture digests are joined into one tag at the end.
+#
+# Needs the DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets; the push is skipped without them.
+# ASTER_IMAGE_NS (default sheepsticked) is the namespace.
+
+name: publish
+on:
+  push:
+    branches: [main]
+    paths: ['docker/**', 'packages/**', 'package.json', 'package-lock.json', '.dockerignore',
+      '.github/workflows/publish.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: what this run will do
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      push: ${{ steps.decide.outputs.push }}
+    env:
+      # `secrets` is not available in an `if:` condition anywhere (GitHub's context table allows it in `env:` only), so
+      # the decision is made here, once, and the rest of the workflow reads it as an ordinary job output.
+      HAVE_ACCOUNT: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+      NAMESPACE: ${{ vars.ASTER_IMAGE_NS }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          push=$HAVE_ACCOUNT
+          [ "$push" = true ] ||
+            printf '::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN are not set, so the images are built but not pushed\n'
+          echo "push=$push" >> "$GITHUB_OUTPUT"
+          printf 'push=%s namespace=%s\n' "$push" "${NAMESPACE:-sheepsticked}"
+
+  build:
+    name: ${{ matrix.image }} ${{ matrix.arch }}
+    needs: gate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: asterisk
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            context: docker/asterisk
+            file: docker/asterisk/Dockerfile
+            target: aster
+            timeout: 60
+          - image: asterisk
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: docker/asterisk
+            file: docker/asterisk/Dockerfile
+            target: aster
+            timeout: 120
+          - image: controller
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            context: .
+            file: docker/controller/Dockerfile
+            timeout: 30
+          - image: controller
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            context: .
+            file: docker/controller/Dockerfile
+            timeout: 30
+    env:
+      # Read straight from the variable, never through a job output: the runner drops an output whose value matches a
+      # secret ("Skip output ... since it may contain secret"), and the namespace is also DOCKERHUB_USERNAME.
+      IMAGE: ${{ vars.ASTER_IMAGE_NS || 'sheepsticked' }}/aster-${{ matrix.image }}
+      STANDALONE: ${{ vars.ASTER_IMAGE_NS || 'sheepsticked' }}/asterisk-dongle-quectel
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        if: needs.gate.outputs.push == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # push-by-digest: the architecture is published with no tag of its own, so a half-finished run never leaves a
+      # tag pointing at one architecture. Without credentials nothing is exported at all — the build itself is the check.
+      - name: Build ${{ matrix.image }} for ${{ matrix.platform }}
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          target: ${{ matrix.target }}
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          cache-from: type=gha,scope=publish-${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=publish-${{ matrix.image }}-${{ matrix.arch }}
+          outputs: >-
+            ${{ needs.gate.outputs.push == 'true'
+                && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.IMAGE)
+                || 'type=cacheonly' }}
+
+      - name: Build the standalone asterisk-dongle-quectel for ${{ matrix.platform }}
+        if: matrix.image == 'asterisk'
+        id: standalone
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          target: asterisk-dongle-quectel
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          cache-from: type=gha,scope=publish-${{ matrix.image }}-${{ matrix.arch }}
+          outputs: >-
+            ${{ needs.gate.outputs.push == 'true'
+                && format('type=image,name={0},push-by-digest=true,name-canonical=true,push=true', env.STANDALONE)
+                || 'type=cacheonly' }}
+
+      - name: Keep the digests for the manifest lists
+        if: needs.gate.outputs.push == 'true'
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          STANDALONE_DIGEST: ${{ steps.standalone.outputs.digest }}
+        run: |
+          [ -n "$DIGEST" ] || { echo "::error::the build produced no digest"; exit 1; }
+          mkdir -p digests
+          printf '%s' "$DIGEST" > "digests/aster-${{ matrix.image }}-${{ matrix.arch }}"
+          if [ "${{ matrix.image }}" = asterisk ]; then
+            [ -n "$STANDALONE_DIGEST" ] || { echo "::error::the standalone build produced no digest"; exit 1; }
+            printf '%s' "$STANDALONE_DIGEST" > "digests/asterisk-dongle-quectel-${{ matrix.arch }}"
+          fi
+
+      - name: Upload the digest
+        if: needs.gate.outputs.push == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    name: ${{ matrix.repo }} manifest list
+    needs: [gate, build]
+    if: needs.gate.outputs.push == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        repo: [aster-asterisk, aster-controller, asterisk-dongle-quectel]
+    env:
+      # Read straight from the variable, never through a job output: the runner drops an output whose value matches a
+      # secret ("Skip output ... since it may contain secret"), and the namespace is also DOCKERHUB_USERNAME.
+      IMAGE: ${{ vars.ASTER_IMAGE_NS || 'sheepsticked' }}/${{ matrix.repo }}
+      REPO: ${{ matrix.repo }}
+    steps:
+      # Full history: the version tag names the last commit that changed docker/asterisk.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Join the architectures into latest
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=()
+          for arch in amd64 arm64; do
+            file="digests/$REPO-$arch"
+            [ -s "$file" ] || { echo "::error::no digest for $arch"; exit 1; }
+            refs+=("$IMAGE@$(cat "$file")")
+          done
+          tags=(-t "$IMAGE:latest")
+          if [ "$REPO" = asterisk-dongle-quectel ]; then
+            version=$(sed -n 's/^ARG ASTERISK_VERSION=//p' docker/asterisk/Dockerfile)
+            commit=$(git log -1 --format=%H -- docker/asterisk | cut -c1-7)
+            [ -n "$version" ] && [ -n "$commit" ] || { echo "::error::no Asterisk version or commit for the tag"; exit 1; }
+            tags+=(-t "$IMAGE:$version-$commit")
+          fi
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "$IMAGE:latest"
+          printf '::notice::published %s:latest (%s)\n' "$IMAGE" \
+            "$(docker buildx imagetools inspect "$IMAGE:latest" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+
+      - name: Docker Hub description
+        if: matrix.repo == 'asterisk-dongle-quectel'
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          SHORT: "Asterisk 20 with chan_dongle and chan_quectel, patched: USB GSM modems as Asterisk channels"
+        run: |
+          set -euo pipefail
+          token=$(jq -n --arg id "$DOCKERHUB_USERNAME" --arg secret "$DOCKERHUB_TOKEN" '{identifier: $id, secret: $secret}' |
+            curl -fsS -H 'Content-Type: application/json' -d @- https://hub.docker.com/v2/auth/token | jq -r .access_token)
+          echo "::add-mask::$token"
+          status=$(jq -n --arg d "$SHORT" --rawfile f docker/asterisk/DOCKERHUB.md '{description: $d, full_description: $f}' |
+            curl -sS -o response.json -w '%{http_code}' -X PATCH -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $token" -d @- "https://hub.docker.com/v2/repositories/$IMAGE")
+          if [ "$status" != 200 ]; then
+            head -c 500 response.json; echo
+            echo "::error::Docker Hub answered $status to the description update"
+            exit 1
+          fi

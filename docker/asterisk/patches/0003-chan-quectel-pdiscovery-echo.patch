@@ -1,0 +1,159 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Sun, 13 Sep 2026 00:00:00 +0000
+Subject: [PATCH] pdiscovery: read the IMEI and IMSI line by line so a command
+ echo does not hide them
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: `quectel discovery` printed `imei=` empty for a Quectel EC25 whose AT
+         port has echo on, so a scanned modem could not be assigned without
+         typing its IMEI (applies on top of 0002)
+
+pdiscovery_get_info() asks a free port for both identities with the one
+command "AT+GSN; +CIMI". ATE1 is the modem's factory default after a power
+cycle, and with it an EC25 answers
+
+    AT+GSN; +CIMI\r\r\n490154203237518\r\n\r\n+CME ERROR: 3\r\n
+
+0002 parsed that with sscanf(str, "AT+GSN %15[0-9] OK") and
+sscanf(str, " %15[0-9] OK"). The first pattern stops at the ';' of the echo
+and the second at its 'A', so the IMEI came out empty; before 0002 the same
+answer gave the old imei=;/imsi=AT+GSN; garbage. With echo off both patterns
+read the first digit token for the IMSI too, so a modem reported its IMEI
+as its IMSI. For an EC25: echo off -> imei=490154203237518
+imsi=490154203237518, echo on -> imei= imsi=.
+
+Fix: replace pdiscovery_handle_ati()/_cimi() with one parser that reads the
+answer line by line, ignores every line that is not wholly decimal digits
+(the echo, OK, ERROR, +CME ERROR, a Huawei ^BOOT: line), and takes the digit
+lines in the order the command asked for them: the IMEI (exactly IMEI_SIZE
+digits) first when it was wanted, then the IMSI (6..IMSI_SIZE digits). A
+digit line is copied into its buffer only after its length is checked, and
+a longer one keeps its place but is rejected, so the bound 0002 put on the
+discovery crash still holds.
+---
+ pdiscovery.c | 93 ++++++++++++++++++++++++++++++----------------------
+ 1 file changed, 54 insertions(+), 39 deletions(-)
+
+diff --git a/pdiscovery.c b/pdiscovery.c
+index f2ec82b..5cea2a2 100644
+--- a/pdiscovery.c
++++ b/pdiscovery.c
+@@ -17,16 +17,6 @@
+ #include "chan_quectel.h"		/* opentty() closetty() */
+ #include "manager.h"			/* manager_event_message_raw() */
+ 
+-/* Bounded IMEI/IMSI scanning for pdiscovery_handle_ati()/_cimi(). The field width is one digit
+- * MORE than the identifier, so that a longer run of digits comes back too long and is rejected
+- * instead of being silently truncated to a valid-looking identifier. The buffers add room for
+- * the terminating NUL. The typedef is a compile-time check that the widths track the sizes. */
+-#define PDISC_STR_(x)	#x
+-#define PDISC_STR(x)	PDISC_STR_(x)
+-#define PDISC_IMEI_W	16
+-#define PDISC_IMSI_W	16
+-typedef char pdisc_width_check[(PDISC_IMEI_W == IMEI_SIZE + 1 && PDISC_IMSI_W == IMSI_SIZE + 1) ? 1 : -1];
+-
+ /*
+ static const char sys_bus_usb_drivers_usb[] = "/sys/bus/usb/drivers/usb";
+ */
+@@ -430,35 +420,62 @@ static const struct pdiscovery_device * pdiscovery_lookup_ids(const char * devna
+ 	return NULL;
+ }
+ 
+-#/* 0D 0A IMEI: <15 digits> 0D 0A */
+-static char * pdiscovery_handle_ati(const char * devname, char * str)
+-{
+-	char imei[PDISC_IMEI_W + 1];
+-
+-	/* An IMEI is exactly IMEI_SIZE decimal digits. Bind the conversion to a digits-only field
+-	 * so an over-long or non-numeric token -- e.g. a Huawei "^BOOT:" unsolicited line that
+-	 * lands in this probe read -- can neither overflow the stack buffer (this module is built
+-	 * without a stack protector) nor be returned as a bogus IMEI. */
+-	if ((sscanf(str, "AT+GSN %" PDISC_STR(PDISC_IMEI_W) "[0-9] OK", imei) == 1 ||
+-	     sscanf(str, " %" PDISC_STR(PDISC_IMEI_W) "[0-9] OK", imei) == 1) &&
+-	    strlen(imei) == IMEI_SIZE)
+-		return ast_strdup(imei);
+-
+-	return NULL;
++/* The identities in a probe's answer. The answer is read line by line and only lines made wholly of
++ * decimal digits count, so the command echo a modem sends while ATE1 is set (the factory default after
++ * a power cycle: "AT+GSN; +CIMI" on a Quectel EC25), "OK", "+CME ERROR: 3" or a Huawei "^BOOT:" line
++ * is skipped instead of defeating the parse. The digit lines are taken in the order
++ * pdiscovery_get_info() asked for them -- "AT+GSN; +CIMI" answers the IMEI first, then the IMSI --
++ * so the IMEI is not taken for the IMSI as well. A digit line is copied only after its length is
++ * checked; a longer one keeps its place and is rejected, which keeps the bound on the discovery crash. */
++#define PDISC_ID_MAX	15
++#define PDISC_IDS	2
++#define PDISC_IMSI_MIN	6
++typedef char pdisc_id_size_check[(IMEI_SIZE == PDISC_ID_MAX && IMSI_SIZE == PDISC_ID_MAX) ? 1 : -1];
++
++/* Copies the digit-only lines of str into ids[] in order, at most PDISC_IDS of them; a line longer than
++ * PDISC_ID_MAX keeps its place as an empty entry. Returns how many were found. */
++static int pdiscovery_digit_lines(const char * str, char ids[PDISC_IDS][PDISC_ID_MAX + 1])
++{
++	int count = 0;
++
++	while(*str && count < PDISC_IDS) {
++		size_t len = strcspn(str, "\r\n");
++		if(len > 0 && strspn(str, "0123456789") == len) {
++			if(len <= PDISC_ID_MAX) {
++				memcpy(ids[count], str, len);
++				ids[count][len] = 0;
++			} else {
++				ids[count][0] = 0;
++			}
++			count++;
++		}
++		str += len;
++		str += strspn(str, "\r\n");
++	}
++	return count;
+ }
+ 
+-#/* 0D 0A 15 digits 0D 0A */
+-static char * pdiscovery_handle_cimi(const char * devname, char * str)
++/* Sets the IMEI and the IMSI the probe still wanted -- the same conditions pdiscovery_get_info() chose
++ * its command by -- from the digit lines of the answer. */
++static void pdiscovery_handle_ids(const struct pdiscovery_request * req, const char * str, struct pdiscovery_result * res)
+ {
+-	char imsi[PDISC_IMSI_W + 1];
+-
+-	/* Same bound as pdiscovery_handle_ati(): an IMSI is IMSI_SIZE decimal digits. */
+-	if ((sscanf(str, "AT+CIMI %" PDISC_STR(PDISC_IMSI_W) "[0-9] OK", imsi) == 1 ||
+-	     sscanf(str, " %" PDISC_STR(PDISC_IMSI_W) "[0-9] OK", imsi) == 1) &&
+-	    strlen(imsi) == IMSI_SIZE)
+-		return ast_strdup(imsi);
++	char ids[PDISC_IDS][PDISC_ID_MAX + 1];
++	int want_imei = req->imei && res->imei == NULL;
++	int want_imsi = req->imsi && res->imsi == NULL;
++	int count = pdiscovery_digit_lines(str, ids);
++	int next = 0;
++	size_t len;
+ 
+-	return NULL;
++	if(want_imei) {
++		if(next < count && strlen(ids[next]) == IMEI_SIZE)
++			res->imei = ast_strdup(ids[next]);
++		next++;
++	}
++	if(want_imsi && next < count) {
++		len = strlen(ids[next]);
++		if(len >= PDISC_IMSI_MIN && len <= IMSI_SIZE)
++			res->imsi = ast_strdup(ids[next]);
++	}
+ }
+ 
+ #/* return non-zero on done with command */
+@@ -482,10 +499,8 @@ static int pdiscovery_handle_response(const struct pdiscovery_request * req, con
+ 
+ 		ast_debug(4, "[%s discovery] < %s\n", req->name, str);
+ 		done = strstr(str, "OK") != NULL || strstr(str, "ERROR") != NULL;
+-		if(done && req->imei && res->imei == NULL)
+-			res->imei = pdiscovery_handle_ati(req->name, str);
+-		if(done && req->imsi && res->imsi == NULL)
+-			res->imsi = pdiscovery_handle_cimi(req->name, str);
++		if(done)
++			pdiscovery_handle_ids(req, str, res);
+ 		/* restore tail of string for collect data in buffer */
+ 		str[len] = sym;
+ 	}

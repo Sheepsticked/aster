@@ -1,0 +1,124 @@
+/* Tailwind v4 plus the few non-utility rules. Mobile-first (`md:` adds desktop); touch targets >= 44 px and form text
+   >= 16 px so iOS does not zoom on focus. */
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* The nav drawer slides in from the left while its backdrop fades in, and back out when it closes. */
+  --animate-drawer-in: drawer-in 200ms ease-out;
+  --animate-fade-in: fade-in 200ms ease-out;
+  --animate-drawer-out: drawer-out 150ms ease-in forwards;
+  --animate-fade-out: fade-out 150ms ease-in forwards;
+  @keyframes drawer-in {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes drawer-out {
+    to {
+      transform: translateX(-100%);
+    }
+  }
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+}
+
+/* Padding that also clears a phone's notch/home bar (safe-area insets). */
+@utility pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--spacing) * 3);
+}
+@utility pt-safe {
+  padding-top: calc(env(safe-area-inset-top, 0px) + var(--spacing) * 3);
+}
+@utility px-safe {
+  padding-left: calc(env(safe-area-inset-left, 0px) + var(--spacing) * 4);
+  padding-right: calc(env(safe-area-inset-right, 0px) + var(--spacing) * 4);
+}
+
+@layer base {
+  html {
+    /* Do not let the browser resize text on rotation. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-slate-100);
+    color: var(--color-slate-900);
+    font-family: var(--font-sans);
+  }
+
+  /* One visible focus ring everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--color-sky-600);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+
+  /* Lock page scroll while a modal dialog is open. */
+  body:has(dialog[open]) {
+    overflow: hidden;
+  }
+
+  /* Sections draw their own chevron; hide WebKit's summary marker too. */
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* Keep checkboxes from shrinking beside a wrapping label. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    flex-shrink: 0;
+  }
+}
+
+@layer components {
+  /* Shared shapes as classes (usable on <button>, <a> or <label>): `btn` plus a colour modifier, cards and inputs.
+     Buttons are >= 44 px high and inputs use 16 px text; long labels wrap. */
+  .btn {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-transparent px-4
+      text-center text-base font-medium transition-colors select-none disabled:cursor-not-allowed disabled:opacity-60;
+  }
+  .btn-primary {
+    @apply bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900;
+  }
+  .btn-plain {
+    @apply border-slate-300 bg-white text-slate-800 hover:bg-slate-50 active:bg-slate-100;
+  }
+  .btn-ghost {
+    @apply text-slate-700 hover:bg-slate-200/70;
+  }
+  /* Button colour = importance, not action kind:
+       btn-primary       the one main action (save, send, apply, sign in);
+       btn-plain         every other action;
+       btn-danger        removes something or takes a modem off the air (red text on white);
+       btn-danger-solid  confirms a delete in its dialog (the only solid red);
+       btn-ghost         icon buttons and disclosures.
+     Green/amber/rose tints are reserved for states and notices, not buttons. */
+  .btn-danger {
+    @apply border-slate-300 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50 active:bg-rose-100;
+  }
+  .btn-danger-solid {
+    @apply bg-rose-700 text-white hover:bg-rose-800 active:bg-rose-900;
+  }
+  .input {
+    @apply min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base text-slate-900
+      placeholder:text-slate-400 focus:border-sky-600;
+  }
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+  /* Frame around a list: a card from `md` up; nothing below, where the list is already cards. */
+  .list-panel {
+    @apply md:rounded-xl md:border md:border-slate-200 md:bg-white md:p-3 md:shadow-sm;
+  }
+}

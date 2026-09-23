@@ -1,0 +1,51 @@
+# Aster registry. Written by the controller; comments are not preserved when it rewrites this file.
+
+version: 1
+settings:
+  ui_language: "en"
+  timezone: "UTC"
+  retention_days: { operations: 90, notifications: 90 }
+telegram:
+  default_recipients: [ "111222333" ]
+  alerts: false
+modems:
+  - id: "gsm1"
+    driver: "quectel"
+    imei: "490154203237534"
+    enabled: true
+    uac: true
+    usb_port: null
+    ring: [ "504", "505", "506", "507", "508" ]
+    ring_timeout: 120
+    incoming_context: null
+    group: 1
+    recipients: null
+    ports: null
+  - id: "gsm2"
+    driver: "dongle"
+    imei: "356938035643817"
+    enabled: false
+    uac: false
+    usb_port: null
+    ring: [ "511", "512", "513", "514", "515" ]
+    ring_timeout: 120
+    incoming_context: null
+    group: 2
+    recipients: null
+    ports: null
+phones:
+  - { number: "501", label: null, secret: "501", outbound: null, context: null, direct_media: false }
+  - { number: "502", label: null, secret: "502", outbound: null, context: null, direct_media: false }
+  - { number: "503", label: null, secret: "503", outbound: null, context: null, direct_media: false }
+  - { number: "504", label: null, secret: "504", outbound: "gsm1", context: null, direct_media: false }
+  - { number: "505", label: null, secret: "505", outbound: "gsm1", context: null, direct_media: false }
+  - { number: "506", label: null, secret: "506", outbound: "gsm1", context: null, direct_media: false }
+  - { number: "507", label: null, secret: "507", outbound: "gsm1", context: null, direct_media: false }
+  - { number: "508", label: null, secret: "508", outbound: "gsm1", context: null, direct_media: false }
+  - { number: "509", label: null, secret: "509", outbound: null, context: null, direct_media: true }
+  - { number: "510", label: null, secret: "510", outbound: null, context: null, direct_media: true }
+  - { number: "511", label: null, secret: "511", outbound: "gsm2", context: null, direct_media: false }
+  - { number: "512", label: null, secret: "512", outbound: "gsm2", context: null, direct_media: false }
+  - { number: "513", label: null, secret: "513", outbound: "gsm2", context: null, direct_media: false }
+  - { number: "514", label: null, secret: "514", outbound: "gsm2", context: null, direct_media: false }
+  - { number: "515", label: null, secret: "515", outbound: "gsm2", context: null, direct_media: false }

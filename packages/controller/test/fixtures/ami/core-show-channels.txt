@@ -1,0 +1,157 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 479
+LastReload: 479
+Status: Fully Booted
+
+Response: Success
+ActionID: ami-2
+EventList: start
+Message: Channels will follow
+
+Event: CoreShowChannel
+ActionID: ami-2
+Channel: PJSIP/599-00000001
+ChannelState: 5
+ChannelStateDesc: Ringing
+CallerIDNum: 599
+CallerIDName: Mobile
+ConnectedLineNum: +375290000001
+ConnectedLineName: Mobile
+Language: ru
+AccountCode: 
+Context: aster-phones-gsm_test
+Exten: 599
+Priority: 1
+Uniqueid: 1790012358.3
+Linkedid: 1790012358.1
+Application: AppDial
+ApplicationData: (Outgoing Line)
+Duration: 00:00:01
+BridgeId: 
+
+Event: CoreShowChannel
+ActionID: ami-2
+Channel: Local/599@internal-00000000;2
+ChannelState: 4
+ChannelStateDesc: Ring
+CallerIDNum: +375290000001
+CallerIDName: Mobile
+ConnectedLineNum: 599
+ConnectedLineName: Mobile
+Language: en
+AccountCode: 
+Context: internal
+Exten: 599
+Priority: 1
+Uniqueid: 1790012358.2
+Linkedid: 1790012358.1
+Application: Dial
+ApplicationData: PJSIP/599,60
+Duration: 00:00:01
+BridgeId: 
+
+Event: CoreShowChannel
+ActionID: ami-2
+Channel: Local/599@internal-00000000;1
+ChannelState: 5
+ChannelStateDesc: Ringing
+CallerIDNum: 599
+CallerIDName: Mobile
+ConnectedLineNum: +375290000001
+ConnectedLineName: Mobile
+Language: en
+AccountCode: 
+Context: internal
+Exten: 599
+Priority: 1
+Uniqueid: 1790012358.1
+Linkedid: 1790012358.1
+Application: AppDial2
+ApplicationData: (Outgoing Line)
+Duration: 00:00:01
+BridgeId: 
+
+Event: CoreShowChannelsComplete
+ActionID: ami-2
+EventList: Complete
+ListItems: 3
+
+Response: Success
+ActionID: ami-3
+EventList: start
+Message: Channels will follow
+
+Event: CoreShowChannel
+ActionID: ami-3
+Channel: PJSIP/599-00000001
+ChannelState: 6
+ChannelStateDesc: Up
+CallerIDNum: 599
+CallerIDName: Mobile
+ConnectedLineNum: +375290000001
+ConnectedLineName: Mobile
+Language: ru
+AccountCode: 
+Context: aster-phones-gsm_test
+Exten: 
+Priority: 1
+Uniqueid: 1790012358.3
+Linkedid: 1790012358.1
+Application: AppDial
+ApplicationData: (Outgoing Line)
+Duration: 00:00:06
+BridgeId: 324550d4-db5b-42d8-b241-ec0192c5be07
+
+Event: CoreShowChannel
+ActionID: ami-3
+Channel: Local/599@internal-00000000;2
+ChannelState: 6
+ChannelStateDesc: Up
+CallerIDNum: +375290000001
+CallerIDName: Mobile
+ConnectedLineNum: 599
+ConnectedLineName: Mobile
+Language: en
+AccountCode: 
+Context: internal
+Exten: 599
+Priority: 1
+Uniqueid: 1790012358.2
+Linkedid: 1790012358.1
+Application: Dial
+ApplicationData: PJSIP/599,60
+Duration: 00:00:06
+BridgeId: 324550d4-db5b-42d8-b241-ec0192c5be07
+
+Event: CoreShowChannel
+ActionID: ami-3
+Channel: Local/599@internal-00000000;1
+ChannelState: 6
+ChannelStateDesc: Up
+CallerIDNum: 599
+CallerIDName: Mobile
+ConnectedLineNum: +375290000001
+ConnectedLineName: Mobile
+Language: en
+AccountCode: 
+Context: internal
+Exten: 599
+Priority: 1
+Uniqueid: 1790012358.1
+Linkedid: 1790012358.1
+Application: Echo
+ApplicationData: 
+Duration: 00:00:06
+BridgeId: 
+
+Event: CoreShowChannelsComplete
+ActionID: ami-3
+EventList: Complete
+ListItems: 3
+

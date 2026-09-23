@@ -1,0 +1,10 @@
+# invalid: phone number 504 is listed twice
+version: 1
+modems:
+  - { id: gsm1, driver: quectel, imei: "490154203237534", enabled: true, uac: true, usb_port: "1-1.3", ring: ["504"] }
+  - { id: gsm2, driver: dongle, imei: "490154203237542", enabled: true, ring: ["511"] }
+phones:
+  - { number: "501", secret: "501", outbound: null }
+  - { number: "504", secret: "504", outbound: gsm1 }
+  - { number: "511", secret: "511", outbound: gsm2 }
+  - { number: "504", secret: "other", outbound: null }

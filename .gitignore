@@ -1,0 +1,23 @@
+# Aster — ignore build output, local state and secrets (fixtures under test/ are tracked)
+node_modules/
+dist/
+# Playwright's own output: the traces of a failed run and the screenshots the responsive check saves for review
+test-results/
+playwright-report/
+# what the end-to-end run keeps of a stack it tore down: the container logs and the write-budget samples
+test/e2e/logs/
+*.db
+*.db-wal
+*.db-shm
+*.tar.gz
+secrets.env
+.env
+backups/
+/state/
+/spool/
+/logs/
+# the appliance's own data when it runs from this checkout (install.sh's default home)
+/data/
+*.log
+.DS_Store
+.dev/

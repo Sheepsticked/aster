@@ -1,0 +1,253 @@
+# Runs install.sh as root on a clean Ubuntu runner, checks that the appliance comes up healthy, runs it a second time
+# and checks that nothing changed, then makes the same two checks through the Ansible role and follows the
+# pull-from-a-registry update path.
+name: install
+on:
+  push:
+    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'docker/**',
+      'packages/controller/bin/generate.js', '.github/workflows/install.yml']
+  pull_request:
+    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'docker/**',
+      'packages/controller/bin/generate.js', '.github/workflows/install.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: clean host → appliance, then a no-op second run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ASTER_ADMIN_PASSWORD: a-long-enough-password
+      HOME_DIR: ${{ github.workspace }}/data   # install.sh's default home: data/ in the checkout it runs from
+      PORT: "8080"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0   # the image's Node: install.sh uses a local one for the password hash and aster.d
+
+      - name: shellcheck every script the installer ships
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning install/install.sh install/bin/* install/udev/alsa-name \
+            test/install/*.sh tools/write-budget.sh tools/hw-probe.sh
+
+      - name: the ALSA card id udev computes
+        run: sh test/install/alsa-name.test.sh
+
+      - name: the tree, the modes, the ownership rules, and that --sd-tuning touches nothing
+        run: bash test/install/install.test.sh
+
+      - name: aster migrate against a scratch host (check, import, cutover, rollback, cleanup)
+        run: bash test/install/migrate.test.sh
+
+      - name: install.sh on a clean host
+        run: sudo -E install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning
+
+      - name: both containers are healthy and the API says ok
+        run: |
+          set -euo pipefail
+          for name in aster-asterisk aster-controller; do
+            for attempt in $(seq 30); do
+              health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$name")
+              [ "$health" = healthy ] && break
+              [ "$attempt" -eq 30 ] && { echo "$name is $health"; docker logs --tail 50 "$name"; exit 1; }
+              sleep 2
+            done
+            echo "$name: healthy"
+          done
+          body=$(curl -fsS "http://127.0.0.1:$PORT/api/health")
+          echo "$body"
+          echo "$body" | grep -q '"status":"ok"'
+
+      - name: the verbose stream is written once
+        run: |
+          set -euo pipefail
+          # The file on the card keeps verbose(3); the console channel Docker stores does not (logger.conf +
+          # asterisk.conf verbose = 0), so the same lines are not written to the card twice.
+          sudo grep -c 'VERBOSE' "$HOME_DIR/logs/asterisk/full"
+          test "$(docker logs aster-asterisk 2>&1 | grep -c '  ==' || true)" -eq 0
+          sudo test "$(sudo grep -c 'VERBOSE' "$HOME_DIR/logs/asterisk/full")" -gt 0
+
+      - name: everything is root's, and the controller sees only its five directories
+        run: |
+          set -euo pipefail
+          # Both containers run as root; the controller mounts only five home directories, so it cannot rewrite
+          # the checkout or .env that root runs on `aster update`.
+          not_root=$(sudo find "$HOME_DIR" \( ! -uid 0 -o ! -gid 0 \) -printf '%u:%g %P\n')
+          test -z "$not_root" || { echo "not root's:"; echo "$not_root"; exit 1; }
+          test "$(docker exec aster-controller id -u)" = 0
+          seen=$(docker exec aster-controller ls -A /srv/aster | sort | tr '\n' ' ')
+          test "$seen" = 'backups config logs spool state ' || { echo "the controller sees: $seen"; exit 1; }
+          # The aster command is a launcher for this checkout and this home, not a copy.
+          grep -qF "ASTER_HOME=\${ASTER_HOME:-'$HOME_DIR'} exec '$GITHUB_WORKSPACE/install/bin/aster'" /usr/local/bin/aster
+          sudo aster status
+
+      - name: the second run changes nothing and recreates no container
+        run: |
+          set -euo pipefail
+          before=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
+          modes_before=$(sudo find "$HOME_DIR" -printf '%m %u:%g %P\n' | sort | md5sum)
+          output=$(sudo -E install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning)
+          echo "$output" | tail -20
+          test "$(echo "$output" | tail -1)" = 'CHANGED=0'
+          after=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
+          test "$before" = "$after"
+          test "$modes_before" = "$(sudo find "$HOME_DIR" -printf '%m %u:%g %P\n' | sort | md5sum)"
+
+      - name: doctor
+        run: sudo aster doctor --write-seconds 5
+
+      # An update of a serving appliance: --build must replace the containers, and update.sh waits until the API
+      # answers again.
+      - name: update.sh round trip on the running appliance
+        run: |
+          set -euo pipefail
+          # Nothing changed in this checkout, so a rebuild would be identical; stand in for new code with a line the
+          # controller image will carry.
+          echo '// changed by CI so the rebuild produces a new image' >> packages/controller/src/index.js
+          before=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
+          sudo aster update --build --yes | tee update.log
+          grep -q 'the controller answers after' update.log
+          after=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
+          test "$before" != "$after" || { echo "::error::a --build update recreated nothing"; exit 1; }
+          curl -fsS "http://127.0.0.1:$PORT/api/health" | grep -q '"status":"ok"'
+          test -n "$(sudo find "$HOME_DIR/backups" -name 'aster-*.tar.gz' -print -quit)"
+
+      - name: the appliance as the installer left it
+        if: always()
+        run: |
+          sudo find "$HOME_DIR" -maxdepth 2 -printf '%m %u:%g %p\n' | sort
+          docker ps -a
+          docker logs --tail 40 aster-controller || true
+
+  # The same clean-host checks through the Ansible role (a converged appliance reports changed=0), then the pull
+  # path: images and an update from a registry container on the runner, so no Docker Hub credentials are needed.
+  ansible:
+    name: the role on a clean runner, then the pull path
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HOME_DIR: /srv/aster/data   # the role's default: aster_repo_dest (/srv/aster) with data/ inside it
+      PORT: "8080"
+      PLAYBOOK: install/ansible/playbook.yml
+      NS: 127.0.0.1:5000/aster
+      # On a real appliance this comes from a vault file.
+      ADMIN_PASSWORD: a-long-enough-password
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.21.0
+
+      - name: ansible-core
+        run: |
+          pipx install ansible-core
+          ansible-playbook --version | head -1
+
+      - name: syntax check
+        run: ansible-playbook --syntax-check "$PLAYBOOK"
+
+      # A play matching no host exits 0 having done nothing; the playbook's first play turns that into an error.
+      - name: an inventory with no appliance in it is refused
+        run: |
+          if ansible-playbook -i localhost, -c local "$PLAYBOOK" > nohost.log 2>&1; then
+            echo "::error::the playbook accepted an inventory whose pattern matches nothing"; cat nohost.log; exit 1
+          fi
+          grep -q 'no host in this inventory matches' nohost.log
+
+      # The role reports from install.sh's CHANGED=<n> line: checked against a stand-in installer (no line fails,
+      # the last line counts, a non-zero exit fails whatever it printed).
+      - name: the contract between the role and CHANGED=<n>
+        run: |
+          set -euo pipefail
+          src=$(mktemp -d); dest=$(mktemp -d); home=$(mktemp -d)
+          mkdir -p "$src/install" "$home/config"
+          : > "$home/config/secrets.env"     # not a first install, so no password is needed
+          contract() {   # 1 = installer body, 2 = expected exit, 3 = expected state of the "what it did" dump, 4 = what is being shown
+            printf '#!/bin/bash\n%s\n' "$1" > "$src/install/install.sh"
+            chmod +x "$src/install/install.sh"
+            status=0
+            ansible-playbook -i localhost, -c local -e aster_hosts=localhost -e aster_become=false \
+              -e aster_src="$src" -e aster_repo_dest="$dest" -e aster_home="$home" \
+              -e aster_admin_password=pw -e aster_start=false -e aster_doctor=false \
+              "$PLAYBOOK" > contract.log 2>&1 || status=$?
+            test "$status" = "$2" || { echo "::error::$4: exit $status, expected $2"; cat contract.log; exit 1; }
+            if [ "$3" != skip-check ]; then
+              grep -A1 'What install.sh did' contract.log | grep -q "$3" ||
+                { echo "::error::$4: the run should have been $3"; cat contract.log; exit 1; }
+            fi
+            echo "ok: $4"
+          }
+          contract 'echo "did things"'                  2 skip-check  'no CHANGED line at all is a broken contract'
+          contract 'echo "CHANGED=0"'                   0 skipping    'CHANGED=0 is not a change'
+          contract 'echo "CHANGED=0"; echo "CHANGED=7"' 0 'ok:'       'the last CHANGED line is the one that counts'
+          contract 'echo "CHANGED=3"; exit 1'           2 skip-check  'an installer that fails is a failure'
+          rm -rf "$src" "$dest" "$home"
+
+      - name: the role turns this runner into an appliance
+        run: |
+          set -euo pipefail
+          ansible-playbook -i localhost, -c local -e aster_hosts=localhost \
+            -e aster_admin_password="$ADMIN_PASSWORD" -e aster_http_port="$PORT" -e aster_sd_tuning=false \
+            -e aster_image_source=build "$PLAYBOOK" | tee run1.log
+          grep -qE 'changed=[1-9]' run1.log
+          curl -fsS "http://127.0.0.1:$PORT/api/health" | grep -q '"status":"ok"'
+          sudo test -d /srv/aster/install    # the sources were shipped, not symlinked
+          sudo test "$(stat -c '%u:%g' /srv/aster)" = '0:0'
+
+      - name: running it again changes nothing
+        run: |
+          set -euo pipefail
+          before=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
+          ansible-playbook -i localhost, -c local -e aster_hosts=localhost \
+            -e aster_admin_password="$ADMIN_PASSWORD" -e aster_http_port="$PORT" -e aster_sd_tuning=false \
+            -e aster_image_source=build "$PLAYBOOK" | tee run2.log
+          grep -q 'changed=0 ' run2.log || { echo "::error::a converged appliance reported a change"; exit 1; }
+          test "$before" = "$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')"
+
+      - name: the same appliance, images from a registry instead of a build
+        run: |
+          set -euo pipefail
+          docker run -d --name test-registry -p 127.0.0.1:5000:5000 registry:2
+          for image in aster-asterisk aster-controller; do
+            docker tag "aster/$image:dev" "$NS/$image:dev"
+            docker push -q "$NS/$image:dev"
+          done
+          ansible-playbook -i localhost, -c local -e aster_hosts=localhost \
+            -e aster_admin_password="$ADMIN_PASSWORD" -e aster_http_port="$PORT" -e aster_sd_tuning=false \
+            -e aster_image_source=pull -e aster_image_ns="$NS" -e aster_version=dev "$PLAYBOOK" | tee pull.log
+          sudo grep -q "^ASTER_IMAGE_SOURCE=pull$" /srv/aster/.env   # beside the compose file, not in the home
+          sudo grep -q "^ASTER_IMAGE_NS=$NS$" /srv/aster/.env
+          curl -fsS "http://127.0.0.1:$PORT/api/health" | grep -q '"status":"ok"'
+
+      # The update path of a released appliance: .env says pull, and a new controller image in the registry must
+      # replace the running one.
+      - name: update.sh --pull round trip
+        run: |
+          set -euo pipefail
+          # A label that changes every run, so the cached rebuild still gets a new digest to pull.
+          docker build -q --label "aster.ci-rebuild=$GITHUB_RUN_ID-$(date +%s)" \
+            -f docker/controller/Dockerfile -t "$NS/aster-controller:dev" . >/dev/null
+          docker push -q "$NS/aster-controller:dev"
+          docker image rm "$NS/aster-controller:dev" >/dev/null
+          docker tag aster/aster-controller:dev "$NS/aster-controller:dev"   # the appliance is one image behind again
+          before=$(docker inspect -f '{{.Id}}' aster-controller)
+          sudo /srv/aster/install/bin/update.sh --yes | tee update-pull.log
+          grep -q 'images (pull)' update-pull.log
+          grep -q 'the controller answers after' update-pull.log
+          test "$before" != "$(docker inspect -f '{{.Id}}' aster-controller)" ||
+            { echo "::error::the pulled image did not reach the container"; exit 1; }
+          curl -fsS "http://127.0.0.1:$PORT/api/health" | grep -q '"status":"ok"'
+
+      - name: what the role left behind
+        if: always()
+        run: |
+          sudo find "$HOME_DIR" -maxdepth 2 -printf '%m %u:%g %p\n' | sort
+          docker ps -a
+          docker logs --tail 40 aster-controller || true

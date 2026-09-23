@@ -1,0 +1,121 @@
+# Aster — Asterisk menuselect member list (Asterisk 20.21.0 tree names). Applied by menuselect-apply.sh in the
+# Dockerfile: every module/sound/utility category is disabled first, then this list is applied, then the result is
+# verified (an unknown name or an entry that stays disabled because of an unmet dependency fails the build).
+# Format: one member per line, "+name" enable, "-name" keep disabled (documents a deliberate rejection), "#" comment.
+# MENUSELECT_CFLAGS and MENUSELECT_CHANNELSTORAGE keep Asterisk's defaults except where listed below.
+
+# --- build flags ---
+-BUILD_NATIVE                    # never -march=native: the image is built in CI and must run on any host CPU
+
+# --- channels (chan_quectel / chan_dongle are built out of tree in the drivers stage) ---
++chan_pjsip
+-chan_sip                        # deprecated; never built
+-chan_iax2
+-chan_dahdi
+-chan_alsa
+-chan_console
+-chan_motif
+-chan_unistim
+-chan_mgcp
+-chan_skinny
+-chan_rtp
+-chan_bridge_media
+
+# --- bridging framework (two-party call bridges) ---
++bridge_simple
++bridge_native_rtp
++bridge_holding
++bridge_builtin_features
++bridge_builtin_interval_features
+-bridge_softmix                  # multi-party mixing (ConfBridge) only
+
+# --- PJSIP stack ---
++res_pjproject
++res_pjsip
++res_pjsip_session
++res_pjsip_registrar
++res_pjsip_authenticator_digest
++res_pjsip_outbound_authenticator_digest
++res_pjsip_endpoint_identifier_user
++res_pjsip_endpoint_identifier_ip
++res_pjsip_sdp_rtp
++res_pjsip_dtmf_info
++res_pjsip_nat
++res_pjsip_outbound_registration
++res_pjsip_pubsub
++res_pjsip_logger
++res_pjsip_caller_id
++res_pjsip_rfc3326
++res_rtp_asterisk
++res_srtp
+-res_pjsip_endpoint_identifier_anonymous   # no anonymous endpoint, ever
+-res_pjsip_transport_websocket
+-res_pjsip_config_wizard
+
+# --- applications ---
++app_dial
++app_system
++app_stack
++app_verbose
++app_exec
++app_playback
++app_echo
++app_originate
++app_record                      # the call audio check records what a modem call delivers
+
+# --- functions ---
++func_base64
++func_strings
++func_logic
++func_cdr
++func_channel
++func_callerid
++func_env
++func_math
++func_timeout
++func_jitterbuffer               # JITTERBUFFER() on a phone's channel in a call through a modem (generated dialplan)
+-func_shell                      # never: shell access from the dialplan
+
+# --- core services ---
++pbx_config
++res_musiconhold
++res_timing_timerfd
++res_clioriginate
++res_sorcery_config
++res_sorcery_memory
++res_sorcery_astdb
+-cdr_manager                     # CDR core only, no backends
+-cdr_csv
+-cdr_custom
+-cel_custom
+-pbx_ael
+-pbx_lua
+-pbx_dundi
+-pbx_spool
+-res_http_websocket
+-res_ari
+-res_stasis
+-res_agi
+-res_cliexec
+-res_phoneprov
+-res_calendar
+-res_fax
+
+# --- codecs / formats ---
++codec_ulaw
++codec_alaw
++codec_gsm
++format_wav
++format_gsm
++format_pcm
++format_sln
+-codec_opus
+-codec_speex
+-codec_ilbc
+
+# --- sounds (fetched by sounds/Makefile at build time, sha1-checked; versions pinned by the Asterisk tarball) ---
++CORE-SOUNDS-EN-GSM
++CORE-SOUNDS-RU-GSM
++MOH-OPSOUND-GSM
+
+# --- samples: never installed (no `make samples`) ---

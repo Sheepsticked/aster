@@ -1,0 +1,573 @@
+From 52408797f33b13404f1063c4bf8037ec77c4faaf Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Thu, 10 Sep 2026 08:05:20 +0000
+Subject: [PATCH] QuectelAtCommand: AMI action with correlated
+ QuectelAtResponse/QuectelAtDone events
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: QuectelAtCommand action + QuectelAtResponse/QuectelAtDone events for Aster
+         (protocol contract: docker/asterisk/patches/README.md in the Aster repository)
+
+Mirror of the chan_dongle patch (0001-chan-dongle-at-command-events.patch, wdoekes@31eb619) on
+this fork: apart from names, at_queue.[ch] and manager.h are identical in both drivers and the
+at_command, at_response, do_monitor_phone() and manager code the patch touches has the same shape.
+
+An AMI client sends one AT command to a device and receives the modem's answer through events
+that carry the action's ActionID. Lines are attributed by the driver's own command queue, never
+by timing:
+
+- at_queue: a task carries the ActionID of the QuectelAtCommand that queued it (empty for every
+  other task). at_queue_insert_actionid() sets the tag only after the command was written, so an
+  action that fails with "Queue error" never produces an event. at_queue_actionid_done() emits
+  the single QuectelAtDone of the head task and clears the tag, so nothing later is attributed to
+  that ActionID. at_queue_flush() (disconnect, reset, restart) ends tagged tasks with
+  Result: ERROR, Error: queue flushed; a tagged task removed for any other reason gets
+  Error: task removed.
+- at_command: at_enqueue_user_cmd_id() queues a CMD_USER task with the action's timeout, ahead
+  of other pending commands, exactly like the "quectel cmd" CLI command does.
+- at_response: for a tagged CMD_USER task every line that is neither the final result nor an
+  unsolicited report is a QuectelAtResponse; OK ends the task with Result: OK, ERROR /
+  +CMS ERROR / +CME ERROR with Result: ERROR and the line as Error. "+CME ERROR:" is added to the
+  response table so that it is handled like "+CMS ERROR:" instead of being ignored until the
+  command times out. The unsolicited reports are the same result types as in chan_dongle (in this
+  fork RES_ORIG/RES_CEND/RES_CONF match "^DSCI:", "VOICE CALL:" and "MISSED_CALL:") plus
+  RES_RCEND ("REMOTE CALL END"), which only this fork classifies.
+- chan_quectel do_monitor_phone(): a response timeout emits Result: TIMEOUT before the existing
+  handling disconnects and restarts the device.
+- manager: the QuectelAtCommand action (EVENT_FLAG_SYSTEM) validates ActionID (1-63 characters
+  [A-Za-z0-9._-]), Command (1-256 characters, no CR/LF) and Timeout (1-60 s, default 15) before
+  the device lookup, then requires the device to be connected and initialized. The events escape
+  CR/LF like manager_event_message().
+
+Line endings: the upstream blobs of at_command.[ch], at_response.[ch], chan_quectel.c and
+manager.c are CRLF although .gitattributes says "* text eol=lf". git apply normalizes a file
+while reading it and writes it back with the attribute's ending, so this patch is an LF diff
+against the normalized text and the six files come out LF after the patch (at_queue.[ch] and
+manager.h are LF upstream).
+
+Untagged user commands (CLI "quectel cmd") behave as before and emit nothing.
+---
+ at_command.c   |  19 ++++++
+ at_command.h   |   1 +
+ at_queue.c     |  61 +++++++++++++++++++
+ at_queue.h     |   3 +
+ at_response.c  |  58 +++++++++++++++++-
+ at_response.h  |   1 +
+ chan_quectel.c |   2 +
+ manager.c      | 158 +++++++++++++++++++++++++++++++++++++++++++++++++
+ manager.h      |   4 ++
+ 9 files changed, 304 insertions(+), 3 deletions(-)
+
+diff --git a/at_command.c b/at_command.c
+index 610c947..acd6239 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -697,6 +697,25 @@ EXPORT_DEF int at_enqueue_user_cmd(struct cpvt *cpvt, const char *input)
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Enqueue a user command tagged with an AMI ActionID (QuectelAtCommand)
++ * \param cpvt -- cpvt structure
++ * \param input -- the AT command line, sent verbatim followed by CR
++ * \param actionid -- reported in the QuectelAtResponse and QuectelAtDone events
++ * \param timeout_s -- seconds to wait for the final OK/ERROR line
++ * \return 0 on success
++ */
++EXPORT_DEF int at_enqueue_user_cmd_id(struct cpvt *cpvt, const char *input, const char *actionid, unsigned timeout_s)
++{
++	at_queue_cmd_t at_cmd = ATQ_CMD_DECLARE_DYNFT(CMD_USER, RES_OK, ATQ_CMD_FLAG_DEFAULT, timeout_s, 0);
++
++	if (at_fill_generic_cmd(&at_cmd, "%s\r", input) != 0 || at_queue_insert_actionid(cpvt, &at_cmd, 1, 1, actionid) != 0) {
++		chan_quectel_err = E_QUEUE;
++		return -1;
++	}
++	return 0;
++}
++
+ /*!
+  * \brief Start reading next SMS, if any
+  * \param cpvt -- cpvt structure
+diff --git a/at_command.h b/at_command.h
+index 46989ef..040e408 100644
+--- a/at_command.h
++++ b/at_command.h
+@@ -114,6 +114,7 @@ EXPORT_DECL int at_enqueue_reset(struct cpvt *cpvt);
+ EXPORT_DECL int at_enqueue_dial(struct cpvt *cpvt, const char *number, int clir);
+ EXPORT_DECL int at_enqueue_answer(struct cpvt *cpvt);
+ EXPORT_DECL int at_enqueue_user_cmd(struct cpvt *cpvt, const char *input);
++EXPORT_DECL int at_enqueue_user_cmd_id(struct cpvt *cpvt, const char *input, const char *actionid, unsigned timeout_s);
+ EXPORT_DECL void at_retrieve_next_sms(struct cpvt *cpvt, at_cmd_suppress_error_t suppress_error);
+ EXPORT_DECL int at_enqueue_retrieve_sms(struct cpvt *cpvt, int index, at_cmd_suppress_error_t suppress_error);
+ EXPORT_DECL int at_enqueue_delete_sms(struct cpvt *cpvt, int index);
+diff --git a/at_queue.c b/at_queue.c
+index 65faf1c..01e4e20 100644
+--- a/at_queue.c
++++ b/at_queue.c
+@@ -15,6 +15,7 @@
+ 
+ #include "at_queue.h"
+ #include "chan_quectel.h"		/* struct pvt */
++#include "manager.h"			/* manager_event_at_done() */
+ 
+ /*!
+  * \brief Free an item data
+@@ -68,6 +69,11 @@ static void at_queue_remove (struct pvt * pvt)
+ 				PVT_ID(pvt), task->cmdsno, at_cmd2str (task->cmds[0].cmd),
+ 				at_res2str (task->cmds[0].res));
+ 
++		if(task->actionid[0])
++		{
++			/* a QuectelAtCommand task leaves the queue without its final response (unexpected result, write error) */
++			manager_event_at_done(PVT_ID(pvt), task->actionid, "ERROR", "task removed");
++		}
+ 		at_queue_free(task);
+ 	}
+ }
+@@ -106,6 +112,7 @@ static at_queue_task_t * at_queue_add (struct cpvt * cpvt, const at_queue_cmd_t
+ 			e->cmdsno = cmdsno;
+ 			e->cindex = 0;
+ 			e->cpvt = cpvt;
++			e->actionid[0] = '\0';
+ 
+ 			memcpy(&e->cmds[0], cmds, cmdsno * sizeof(*cmds));
+ 
+@@ -315,6 +322,58 @@ EXPORT_DEF int at_queue_insert(struct cpvt * cpvt, at_queue_cmd_t * cmds, unsign
+ 	return at_queue_insert_uid(cpvt, cmds, cmdsno, athead, 0);
+ }
+ 
++/*!
++ * \brief Add a task tagged with an AMI ActionID (QuectelAtCommand) and write it when it became the head
++ * \param cpvt -- cpvt structure
++ * \param cmds -- the commands; dynamic data is freed on failure as in at_queue_insert_uid()
++ * \param cmdsno -- number of commands
++ * \param athead -- non-0 insert after the current head
++ * \param actionid -- reported in the QuectelAtResponse and QuectelAtDone events of this task
++ * \return 0 on success non-0 on error; on error the task is not queued and no event was emitted
++ */
++#/* */
++EXPORT_DEF int at_queue_insert_actionid(struct cpvt * cpvt, at_queue_cmd_t * cmds, unsigned cmdsno, int athead, const char * actionid)
++{
++	unsigned idx;
++	at_queue_task_t *task = at_queue_add(cpvt, cmds, cmdsno, athead);
++
++	if(!task)
++	{
++		for(idx = 0; idx < cmdsno; idx++)
++		{
++			at_queue_free_data(&cmds[idx]);
++		}
++		return -1;
++	}
++
++	/* Only the head is written, and only when the queue was empty is that this task; a write error removes
++	   it again. The tag is set after the write, so a failed action never produces a QuectelAtDone. */
++	if (at_queue_run(cpvt->pvt))
++		return -1;
++
++	ast_copy_string(task->actionid, actionid, sizeof(task->actionid));
++	return 0;
++}
++
++/*!
++ * \brief Emit QuectelAtDone for the head task if it carries an ActionID, then clear the tag so that
++ *        nothing else is ever attributed to that ActionID
++ * \param pvt -- pvt structure
++ * \param result -- OK, ERROR or TIMEOUT
++ * \param error -- text for the Error: header, NULL for OK
++ */
++#/* */
++EXPORT_DEF void at_queue_actionid_done(struct pvt * pvt, const char * result, const char * error)
++{
++	at_queue_task_t * task = AST_LIST_FIRST (&pvt->at_queue);
++
++	if(task && task->actionid[0])
++	{
++		manager_event_at_done(PVT_ID(pvt), task->actionid, result, error);
++		task->actionid[0] = '\0';
++	}
++}
++
+ 
+ 
+ #/* */
+@@ -336,6 +395,8 @@ EXPORT_DEF void at_queue_flush (struct pvt* pvt)
+ 
+ 	while ((task = AST_LIST_FIRST (&pvt->at_queue)))
+ 	{
++		/* QuectelAtCommand tasks report the flush (disconnect, reset, restart) as their final result */
++		at_queue_actionid_done(pvt, "ERROR", "queue flushed");
+ 		at_queue_remove(pvt);
+ 	}
+ }
+diff --git a/at_queue.h b/at_queue.h
+index 417ebe3..4402709 100644
+--- a/at_queue.h
++++ b/at_queue.h
+@@ -81,6 +81,7 @@ typedef struct at_queue_task
+ 	struct cpvt*	cpvt;
+ 
+ 	int uid;
++	char		actionid[64];		/*!< AMI ActionID of a QuectelAtCommand task; empty for every other task */
+ 
+ 	at_queue_cmd_t	cmds[0];	/* this field must be last */
+ } at_queue_task_t;
+@@ -89,6 +90,8 @@ typedef struct at_queue_task
+ EXPORT_DECL int at_queue_insert_const (struct cpvt * cpvt, const at_queue_cmd_t * cmds, unsigned cmdsno, int athead);
+ EXPORT_DECL int at_queue_insert (struct cpvt * cpvt, at_queue_cmd_t * cmds, unsigned cmdsno, int athead);
+ EXPORT_DECL int at_queue_insert_uid (struct cpvt * cpvt, at_queue_cmd_t * cmds, unsigned cmdsno, int athead, int uid);
++EXPORT_DECL int at_queue_insert_actionid (struct cpvt * cpvt, at_queue_cmd_t * cmds, unsigned cmdsno, int athead, const char * actionid);
++EXPORT_DECL void at_queue_actionid_done (struct pvt * pvt, const char * result, const char * error);
+ EXPORT_DECL void at_queue_handle_result (struct pvt * pvt, at_res_t res);
+ EXPORT_DECL void at_queue_flush (struct pvt * pvt);
+ EXPORT_DECL const at_queue_task_t * at_queue_head_task (const struct pvt * pvt);
+diff --git a/at_response.c b/at_response.c
+index fe67a7c..b808e4e 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -62,6 +62,38 @@ EXPORT_DEF const char* at_res2str (at_res_t res)
+ 	return "UNDEFINED";
+ }
+ 
++/*!
++ * \brief Results the modem sends on its own (this fork also classifies REMOTE CALL END); they are never part of
++ *        the answer to a user command
++ * \param res -- result type
++ * \retval 1 unsolicited result
++ * \retval 0 anything else
++ */
++static int at_response_is_unsolicited (at_res_t res)
++{
++	switch (res)
++	{
++		case RES_BOOT:
++		case RES_RSSI:
++		case RES_MODE:
++		case RES_SRVST:
++		case RES_CSSI:
++		case RES_CSSU:
++		case RES_RING:
++		case RES_CEND:
++		case RES_CONN:
++		case RES_ORIG:
++		case RES_CONF:
++		case RES_RCEND:
++		case RES_CMTI:
++		case RES_CDSI:
++		case RES_SMMEMFULL:
++			return 1;
++		default:
++			return 0;
++	}
++}
++
+ /*!
+  * \brief Handle OK response
+  * \param pvt -- pvt structure
+@@ -373,6 +405,8 @@ static int at_response_ok (struct pvt* pvt, at_res_t res)
+ 				}
+ 				break;
+ 			case CMD_USER:
++				/* a QuectelAtCommand task ends here; nothing to do for a CLI command */
++				at_queue_actionid_done (pvt, "OK", NULL);
+ 				break;
+ 			default:
+ 				ast_log (LOG_ERROR, "[%s] Received 'OK' for unhandled command '%s'\n", PVT_ID(pvt), at_cmd2str (ecmd->cmd));
+@@ -412,13 +446,15 @@ static void log_cmd_response_error(const struct pvt* pvt, const at_queue_cmd_t *
+ }
+ 
+ /*!
+- * \brief Handle ERROR response
++ * \brief Handle ERROR, +CMS ERROR and +CME ERROR responses
+  * \param pvt -- pvt structure
++ * \param res -- result type
++ * \param str -- the response line (null terminated), reported by QuectelAtDone for a QuectelAtCommand task
+  * \retval  0 success
+  * \retval -1 error
+  */
+ 
+-static int at_response_error (struct pvt* pvt, at_res_t res)
++static int at_response_error (struct pvt* pvt, at_res_t res, const char* str)
+ {
+ 	const at_queue_task_t * task = at_queue_head_task(pvt);
+ 	const at_queue_cmd_t * ecmd = at_queue_task_cmd(task);
+@@ -661,6 +697,15 @@ static int at_response_error (struct pvt* pvt, at_res_t res)
+ 				log_cmd_response_error(pvt, ecmd, "[%s] Error sending USSD %p\n", PVT_ID(pvt), task);
+ 				break;
+ 
++			case CMD_USER:
++				if (task->actionid[0])
++				{
++					/* the AMI client asked for this command and gets the result; not an error of the modem */
++					ast_debug (1, "[%s] User's command failed: '%s'\n", PVT_ID(pvt), str);
++					at_queue_actionid_done (pvt, "ERROR", str);
++					break;
++				}
++				/* fall through */
+ 			default:
+ 				log_cmd_response_error(pvt, ecmd, "[%s] Received 'ERROR' for unhandled command '%s'\n", PVT_ID(pvt), at_cmd2str (ecmd->cmd));
+ 				break;
+@@ -2051,6 +2096,12 @@ int at_response (struct pvt* pvt, const struct iovec iov[2], int iovcnt, at_res_
+ 		if(ecmd && ecmd->cmd == CMD_USER) {
+ 			ast_verb(1, "[%s] Got Response for user's command:'%s'\n", PVT_ID(pvt), str);
+ 			ast_log(LOG_NOTICE, "[%s] Got Response for user's command:'%s'\n", PVT_ID(pvt), str);
++			/* QuectelAtCommand task: every line that is neither the final result nor unsolicited is a response line;
++			   the final result is reported by at_response_ok() / at_response_error() through at_queue_actionid_done() */
++			if(task->actionid[0] && at_res != RES_OK && at_res != RES_ERROR && at_res != RES_CMS_ERROR && at_res != RES_CME_ERROR
++				&& !at_response_is_unsolicited(at_res)) {
++				manager_event_at_response(PVT_ID(pvt), task->actionid, str);
++			}
+ 		}
+ 		switch (at_res)
+ 		{
+@@ -2129,8 +2180,9 @@ int at_response (struct pvt* pvt, const struct iovec iov[2], int iovcnt, at_res_
+ 				break;
+ 
+ 			case RES_CMS_ERROR:
++			case RES_CME_ERROR:
+ 			case RES_ERROR:
+-				return at_response_error (pvt, at_res);
++				return at_response_error (pvt, at_res, str);
+ 
+ 			case RES_RING:
+ 				return at_response_ring (pvt);
+diff --git a/at_response.h b/at_response.h
+index 3a79f49..e3e689d 100644
+--- a/at_response.h
++++ b/at_response.h
+@@ -23,6 +23,7 @@ struct iovec;
+ \
+ 	_( CMGR,        "+CMGR",        "+CMGR:") \
+ 	_( CMS_ERROR,   "+CMS ERROR",   "+CMS ERROR:") \
++	_( CME_ERROR,   "+CME ERROR",   "+CME ERROR:") \
+ 	_( CMTI,        "+CMTI",        "+CMTI:") \
+ 	_( CDSI,        "+CDSI",        "+CDSI:") \
+ \
+diff --git a/chan_quectel.c b/chan_quectel.c
+index 99cf139..adce0c5 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -668,6 +668,8 @@ static void* do_monitor_phone (void* data)
+ 			if(ecmd)
+ 			{
+ 				ast_log (LOG_ERROR, "[%s] timedout while waiting '%s' in response to '%s'\n", dev, at_res2str (ecmd->res), at_cmd2str (ecmd->cmd));
++				/* a QuectelAtCommand task reports the timeout before the usual handling disconnects and restarts the modem */
++				at_queue_actionid_done (pvt, "TIMEOUT", "timeout");
+ 				goto e_cleanup;
+ 			}
+ 			at_enqueue_ping(&pvt->sys_chan);
+diff --git a/manager.c b/manager.c
+index 91dbec6..2ef615b 100644
+--- a/manager.c
++++ b/manager.c
+@@ -23,6 +23,7 @@
+ #include "manager.h"
+ #include "chan_quectel.h"			/* devices */
+ #include "helpers.h"				/* ITEMS_OF() send_ccwa_set() send_reset() send_sms() send_ussd() */
++#include "at_command.h"				/* at_enqueue_user_cmd_id() */
+ #include "error.h"
+ 
+ static char * espace_newlines(const char * text);
+@@ -258,6 +259,61 @@ EXPORT_DEF void manager_event_new_ussd (const char * devname, char* message)
+ }
+ 
+ 
++/*!
++ * \brief Send a QuectelAtResponse event: one response line of a QuectelAtCommand task
++ * \param devname -- device name
++ * \param actionid -- ActionID of the QuectelAtCommand action
++ * \param line -- the response line; CR/LF are escaped as in manager_event_message()
++ */
++#/* */
++EXPORT_DEF void manager_event_at_response(const char * devname, const char * actionid, const char * line)
++{
++	char * escaped = espace_newlines(line);
++	if(escaped) {
++		manager_event (EVENT_FLAG_SYSTEM, "QuectelAtResponse",
++			"ActionID: %s\r\n"
++			"Device: %s\r\n"
++			"Line: %s\r\n",
++			actionid,
++			devname,
++			escaped
++		);
++		ast_free(escaped);
++	}
++}
++
++/*!
++ * \brief Send the QuectelAtDone event: the single final result of a QuectelAtCommand task
++ * \param devname -- device name
++ * \param actionid -- ActionID of the QuectelAtCommand action
++ * \param result -- OK, ERROR or TIMEOUT
++ * \param error -- the ERROR/+CMS ERROR/+CME ERROR line or a reason, NULL when result is OK
++ */
++#/* */
++EXPORT_DEF void manager_event_at_done(const char * devname, const char * actionid, const char * result, const char * error)
++{
++	char * escaped = NULL;
++	const char * text = "";
++
++	if(error) {
++		escaped = espace_newlines(error);
++		text = escaped ? escaped : "unknown";
++	}
++	manager_event (EVENT_FLAG_SYSTEM, "QuectelAtDone",
++		"ActionID: %s\r\n"
++		"Device: %s\r\n"
++		"Result: %s\r\n"
++		"%s%s%s",
++		actionid,
++		devname,
++		result,
++		error ? "Error: " : "", text, error ? "\r\n" : ""
++	);
++	if(escaped) {
++		ast_free(escaped);
++	}
++}
++
+ #/* */
+ EXPORT_DEF void manager_event_message(const char * event, const char * devname, const char * message)
+ {
+@@ -463,6 +519,88 @@ static int manager_reset (struct mansession* s, const struct message* m)
+ 	return 0;
+ }
+ 
++static const char at_command_actionid_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-";
++
++/*!
++ * \brief QuectelAtCommand: queue one AT command tagged with the action's ActionID; the result comes back as
++ *        QuectelAtResponse events (one per response line) and exactly one QuectelAtDone event. The request is
++ *        validated completely before the device is looked up, so a stopped device still reports a bad request.
++ */
++#/* */
++static int manager_at_command (struct mansession* s, const struct message* m)
++{
++	const char*	device	= astman_get_header (m, "Device");
++	const char*	command	= astman_get_header (m, "Command");
++	const char*	id	= astman_get_header (m, "ActionID");
++	const char*	timeout	= astman_get_header (m, "Timeout");
++
++	char		buf[256];
++	struct pvt*	pvt;
++	size_t		len;
++	unsigned	timeout_s = 15;
++	int		res;
++
++	len = strlen (id);
++	if (len < 1 || len > 63 || strspn (id, at_command_actionid_chars) != len)
++	{
++		astman_send_error (s, m, "Invalid ActionID");
++		return 0;
++	}
++
++	len = strlen (command);
++	if (len < 1 || len > 256 || strpbrk (command, "\r\n"))
++	{
++		astman_send_error (s, m, "Invalid Command");
++		return 0;
++	}
++
++	if (!ast_strlen_zero (timeout))
++	{
++		len = strlen (timeout);
++		if (len > 2 || strspn (timeout, "0123456789") != len || atoi (timeout) < 1 || atoi (timeout) > 60)
++		{
++			astman_send_error (s, m, "Invalid Timeout");
++			return 0;
++		}
++		timeout_s = atoi (timeout);
++	}
++
++	pvt = ast_strlen_zero (device) ? NULL : find_device (device);
++	if (!pvt)
++	{
++		astman_send_error (s, m, "Device not found");
++		return 0;
++	}
++
++	if (!pvt->connected)
++	{
++		ast_mutex_unlock (&pvt->lock);
++		astman_send_error (s, m, "Device not connected");
++		return 0;
++	}
++
++	if (!pvt->initialized)
++	{
++		ast_mutex_unlock (&pvt->lock);
++		astman_send_error (s, m, "Device not initialized");
++		return 0;
++	}
++
++	res = at_enqueue_user_cmd_id (&pvt->sys_chan, command, id, timeout_s);
++	ast_mutex_unlock (&pvt->lock);
++
++	if (res != 0)
++	{
++		astman_send_error (s, m, "Queue error");
++		return 0;
++	}
++
++	snprintf (buf, sizeof (buf), "[%s] AT command queued", device);
++	astman_send_ack (s, m, buf);
++
++	return 0;
++}
++
+ static const char * const b_choices[] = { "now", "gracefully", "when convenient" };
+ #/* */
+ static int manager_restart_action(struct mansession * s, const struct message * m, dev_state_t event)
+@@ -671,6 +809,26 @@ static const struct quectel_manager
+ 	"	ActionID: <id>		Action ID for this transaction. Will be returned.\n"
+ 	"	*When:    < now | gracefully | when convenient > Time when devices reconfigured.\n"
+ 	},
++	{
++	manager_at_command,
++	EVENT_FLAG_SYSTEM,
++	"QuectelAtCommand",
++	"Send an AT command to a Quectel modem and get its responses as AMI events.",
++	"Description: Send one AT command to a connected and initialized Quectel modem. The command is\n"
++	"queued ahead of other pending commands. Every response line arrives as a QuectelAtResponse event\n"
++	"(Line: <text>); the final result arrives as exactly one QuectelAtDone event with\n"
++	"Result: OK | ERROR | TIMEOUT and Error: <text> unless OK. Both events carry the ActionID and\n"
++	"Device of this action. A queue flush (disconnect, reset, restart) ends a pending command with\n"
++	"Result: ERROR. A timeout is reported first and then handled as usual: the modem is\n"
++	"disconnected and restarted.\n\n"
++	"Variables: (Names marked with * are required)\n"
++	"	*ActionID: <id>		1-63 characters [A-Za-z0-9._-]; returned in the response and in the events.\n"
++	"	*Device:   <device>	The Quectel modem that receives the command; must be connected and initialized.\n"
++	"	*Command:  <AT line>	1-256 characters, no CR or LF; sent verbatim followed by CR.\n"
++	"	Timeout:   <seconds>	1-60, default 15; the wait for the final OK/ERROR line.\n"
++	"Errors: Invalid ActionID, Invalid Command, Invalid Timeout, Device not found, Device not connected,\n"
++	"Device not initialized, Queue error.\n"
++	},
+ };
+ 
+ EXPORT_DEF void manager_register()
+diff --git a/manager.h b/manager.h
+index 60b3bb6..3788e4b 100644
+--- a/manager.h
++++ b/manager.h
+@@ -21,6 +21,8 @@ EXPORT_DECL void manager_event_cend(const char * devname, int call_index, int du
+ EXPORT_DECL void manager_event_call_state_change(const char * devname, int call_index, const char * newstate);
+ EXPORT_DECL void manager_event_device_status(const char * devname, const char * newstatus);
+ EXPORT_DECL void manager_event_report(const char * devname, const char *payload, size_t payload_len, const char *scts, const char *dt, int success, int type, const char *report_str);
++EXPORT_DECL void manager_event_at_response(const char * devname, const char * actionid, const char * line);
++EXPORT_DECL void manager_event_at_done(const char * devname, const char * actionid, const char * result, const char * error);
+ 
+ #else  /* BUILD_MANAGER */
+ 
+@@ -36,6 +38,8 @@ EXPORT_DECL void manager_event_report(const char * devname, const char *payload,
+ #define manager_event_call_state_change(devname, call_index, newstate)
+ #define manager_event_device_status(devname, newstatus)
+ #define manager_event_report(devname, payload, payload_len, scts, dt, success, type, report_str)
++#define manager_event_at_response(devname, actionid, line)
++#define manager_event_at_done(devname, actionid, result, error)
+ 
+ #endif /* BUILD_MANAGER */
+ 
+-- 
+2.43.0
+

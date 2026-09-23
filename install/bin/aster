@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# Aster — the host CLI, run from the checkout; install.sh puts a launcher for it into
+# /usr/local/bin/aster. Everything an operator does on the host itself is here; everything else is the web UI.
+#
+# Usage: aster <command>
+#   console            the Asterisk CLI (asterisk -rvvv) inside the container; Ctrl-C leaves it, the appliance keeps running
+#   doctor             check the appliance and say what is wrong
+#   backup             write a backup archive now (backups/aster-<ts>.tar.gz, the newest ten are kept)
+#   update [--force]   back up, fetch or rebuild the images, restart into them (asks first: active calls drop);
+#                      --force updates without the backup, which needs the controller running
+#   start [service]    start the containers, or just `asterisk` / `controller`; creates them if they are gone and
+#                      applies a changed .env (a new port, another image tag)
+#   stop [service]     stop them, or just one — the appliance stays installed and comes back with `aster start`
+#   restart [service]  restart both containers, or just one (the containers as they are: see `start` for a changed .env)
+#   logs [service]     follow the container logs (Ctrl-C to stop)
+#   status             what compose says about the two containers
+#   passwd             change the admin password (every session is ended)
+#   migrate <command>  take over from the old /srv/asterisk appliance: check, import, cutover, rollback, cleanup,
+#                      or replace for cutover and cleanup in one without the old configuration (aster migrate --help)
+#   help               this text
+# Env: ASTER_HOME for a home that is not data/ in this checkout (the launcher install.sh writes sets it).
+set -euo pipefail
+
+# The checkout is the one this file is in, and the home is data/ inside it unless ASTER_HOME says otherwise.
+SELF=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(CDPATH='' cd -- "$SELF/../.." && pwd)
+HOME_DIR=${ASTER_HOME:-$REPO/data}
+HOME_GIVEN=${ASTER_HOME:+1}; HOME_GIVEN=${HOME_GIVEN:-0}
+ENV_FILE=${ASTER_ENV_FILE:-$REPO/.env}
+# Fallback: .env in the home (older installs).
+[ -f "$ENV_FILE" ] || [ ! -f "$HOME_DIR/.env" ] || ENV_FILE="$HOME_DIR/.env"
+COMPOSE_FILE="$REPO/docker-compose.yml"
+
+usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+die() { printf 'aster: %s\n' "$*" >&2; exit 1; }
+# Say which is missing and where: the home ASTER_HOME names (checked first), or the .env install.sh writes.
+need_home() {
+  [ "$HOME_GIVEN" -eq 0 ] || [ -d "$HOME_DIR" ] || die "no $HOME_DIR — ASTER_HOME names another home"
+  [ -f "$ENV_FILE" ] || die "no $ENV_FILE — is this checkout installed? (install/install.sh writes it)"
+}
+# The locations go to compose from here, not from the .env, so a folder moved after the install still runs.
+compose() {
+  need_home
+  ASTER_REPO=$REPO ASTER_HOME=$HOME_DIR docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+run_script() {
+  local name=$1
+  shift
+  need_home
+  exec "$SELF/$name" --home "$HOME_DIR" "$@"
+}
+service() {
+  case ${1:-} in
+    ''|all) printf '' ;;
+    asterisk|aster-asterisk) printf 'asterisk' ;;
+    controller|aster-controller) printf 'controller' ;;
+    *) die "unknown service: $1 (asterisk, controller, or nothing for both)" ;;
+  esac
+}
+
+command -v docker >/dev/null 2>&1 || die "docker is not installed on this host"
+
+case ${1:-help} in
+  console)
+    docker ps --format '{{.Names}}' | grep -qx aster-asterisk || die "the Asterisk container is not running (aster doctor)"
+    exec docker exec -it aster-asterisk asterisk -rvvv
+    ;;
+  doctor)
+    shift
+    run_script doctor.sh "$@"
+    ;;
+  backup)
+    shift
+    run_script backup.sh "$@"
+    ;;
+  update)
+    shift
+    run_script update.sh "$@"
+    ;;
+  start)
+    target=$(service "${2:-}")
+    # `up -d`, not `start`: it also creates missing containers and recreates those whose .env settings changed.
+    # shellcheck disable=SC2086  # an empty target means both services, which is compose's own default
+    compose up -d --remove-orphans $target
+    ;;
+  stop)
+    target=$(service "${2:-}")
+    # stop, not down: the containers stay, so `aster start` brings the same two back.
+    # shellcheck disable=SC2086
+    compose stop $target
+    ;;
+  restart)
+    target=$(service "${2:-}")
+    # shellcheck disable=SC2086  # an empty target means both services, which is compose's own default
+    compose restart $target
+    ;;
+  logs)
+    target=$(service "${2:-}")
+    # shellcheck disable=SC2086
+    compose logs -f --tail 100 $target
+    ;;
+  status)
+    compose ps
+    ;;
+  migrate)
+    shift
+    run_script migrate.sh "$@"
+    ;;
+  passwd)
+    docker ps --format '{{.Names}}' | grep -qx aster-controller || die "the controller container is not running (aster doctor)"
+    # The running controller keeps the old hash in memory, so it is restarted after the change
+    # (`set -e` skips the restart when passwd.js fails or is cancelled).
+    docker exec -it aster-controller node packages/controller/bin/passwd.js
+    printf '\nrestarting the controller so the new password is the one that works\n'
+    compose restart controller
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    printf 'aster: unknown command: %s\n\n' "$1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

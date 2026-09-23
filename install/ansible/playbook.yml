@@ -1,0 +1,29 @@
+# Aster — Ansible playbook: ships this checkout to the appliance and runs install/install.sh, the single source of
+# truth for the host. Nothing here writes into the appliance's data/ or deletes anything.
+#
+#   ansible-playbook -i install/ansible/inventory.example.ini install/ansible/playbook.yml --ask-vault-pass
+#   ansible-playbook -i localhost, -c local -e aster_hosts=localhost install/ansible/playbook.yml   (this machine)
+---
+- name: Resolve the hosts this playbook is meant for
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    # A host pattern that matches nothing makes ansible-playbook exit 0 having done nothing; fail here instead.
+    - name: The inventory must have a host for this playbook
+      ansible.builtin.assert:
+        that: query('inventory_hostnames', aster_hosts | default('aster')) | length > 0
+        fail_msg: >-
+          no host in this inventory matches "{{ aster_hosts | default('aster') }}".
+          Put the appliance in an [aster] group (install/ansible/inventory.example.ini is one),
+          or name the pattern yourself: -e aster_hosts=<host or group>.
+        success_msg: >-
+          {{ query('inventory_hostnames', aster_hosts | default('aster')) | join(', ') }}
+        quiet: true
+
+- name: Aster appliance
+  hosts: "{{ aster_hosts | default('aster') }}"
+  become: "{{ aster_become | default(true) }}"
+  gather_facts: false
+  roles:
+    - aster

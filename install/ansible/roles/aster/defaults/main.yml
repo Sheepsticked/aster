@@ -1,0 +1,29 @@
+# Aster role defaults. install.sh remains the source of truth for the host; these only parametrise its
+# invocation, and every one of them maps to one of its options or to one of the variables in install/env.example.
+---
+# --- where the sources come from ---------------------------------------------------------------------------------
+aster_source: local                      # local = pack the checkout this role lives in and send it; git = clone on the host
+aster_src: "{{ role_path }}/../../../.."  # install/ansible/roles/aster → the repository root
+aster_repo_dest: /srv/aster              # the appliance's folder: the sources run from here, the data goes into data/
+aster_git_url: https://github.com/Sheepsticked/aster.git
+aster_git_version: main                  # a tag for a release: v1.2.3
+
+# --- what install.sh is told -------------------------------------------------------------------------------------
+aster_home: "{{ aster_repo_dest }}/data"  # --home (install.sh's own default: data/ in the checkout)
+aster_http_port: 80                      # --http-port
+aster_image_source: pull                 # --build | --pull, and ASTER_IMAGE_SOURCE in .env (install.sh's own default)
+# The role hands install.sh both of these, so they cannot be left to its own defaults — they follow the source here
+# the same way: the published images are sheepsticked/aster-*:latest, a local build writes aster/aster-*:dev.
+aster_image_ns: "{{ 'sheepsticked' if aster_image_source == 'pull' else 'aster' }}"   # ASTER_IMAGE_NS
+aster_version: "{{ 'latest' if aster_image_source == 'pull' else 'dev' }}"            # ASTER_VERSION
+aster_sd_tuning: auto                    # auto | true | false — accepted and ignored: the installer does not tune the host (README: SD-card wear)
+aster_install_docker: false              # --install-docker: let the installer apt-install Docker when it is missing
+aster_rebuild: false                     # --rebuild: build the images again even when they are there (recreates both containers)
+aster_start: true                        # false passes --skip-up: everything but starting the containers
+aster_doctor: true                       # run doctor.sh at the end and fail the play on a problem
+
+# --- secrets (vault) ---------------------------------------------------------------------------------------------
+# Both are handed to install.sh in a 0600 file that is removed again, never in the environment: `ansible-playbook -vvv`
+# prints a task's environment verbatim. Keep them in a vault file, not here.
+aster_admin_password: ""                 # required on a first install; ignored afterwards (the hash is already set)
+aster_telegram_token: ""                 # optional; Settings → Telegram bot can set it later instead

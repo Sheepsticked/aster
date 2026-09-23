@@ -1,0 +1,20 @@
+{
+  "name": "aster",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Aster — two-modem GSM gateway appliance (Asterisk 20 + chan_quectel/chan_dongle + Node controller + Svelte UI). Root workspace; see README.md.",
+  "license": "GPL-2.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=24.15"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present",
+    "lint": "tsc --noEmit -p jsconfig.json",
+    "check": "npm run lint && npm test"
+  }
+}

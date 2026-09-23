@@ -1,0 +1,9 @@
+# invalid: the IMEI of gsm1 has 14 digits
+version: 1
+modems:
+  - { id: gsm1, driver: quectel, imei: "86710507807510", enabled: true, uac: true, usb_port: "1-1.3", ring: ["504"] }
+  - { id: gsm2, driver: dongle, imei: "490154203237542", enabled: true, ring: ["511"] }
+phones:
+  - { number: "501", secret: "501", outbound: null }
+  - { number: "504", secret: "504", outbound: gsm1 }
+  - { number: "511", secret: "511", outbound: gsm2 }

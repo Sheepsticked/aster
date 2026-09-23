@@ -1,0 +1,55 @@
+# Aster — the end-to-end overlay, laid over the appliance's own docker-compose.yml:
+#   docker compose -p aster-e2e --project-directory <repo> --env-file <home>/.env \
+#     -f docker-compose.yml -f test/e2e/compose.e2e.yaml up -d --wait
+# test/e2e/run.sh does that, with a home it builds from docker/asterisk/test-config and test/e2e/aster.yaml.
+#
+# What it changes and why:
+#   - its own project and container names, so `down -v` can never touch an appliance installed on the same machine;
+#   - no automatic restart: a controller that dies during a flow must stay dead and be seen, and the flow that stops
+#     it on purpose (the spool catching up after a restart) starts it again itself;
+#   - the controller runs as the user who owns the home rather than as root, because the harness reads and writes the
+#     home from the host without sudo (flows/02-sms-reports.js seeds state/aster.db); it reads the fake Bot API on the
+#     host network instead of api.telegram.org, and waits for that fake to be healthy;
+#   - the fake itself: the controller tests' fake, served by the controller image — it has Node and nothing else is needed —
+#     with this directory mounted read-only;
+#   - shorter healthcheck periods, so `up --wait` takes seconds rather than the production minute.
+name: aster-e2e
+
+services:
+  asterisk:
+    container_name: aster-e2e-asterisk
+    restart: "no"
+    healthcheck:
+      interval: 5s
+      start_period: 10s
+
+  controller:
+    container_name: aster-e2e-controller
+    restart: "no"
+    user: "${ASTER_E2E_USER:-0:0}"
+    environment:
+      ASTER_TELEGRAM_API: http://127.0.0.1:${ASTER_E2E_TELEGRAM_PORT:-8090}
+    depends_on:
+      telegram:
+        condition: service_healthy
+    healthcheck:
+      interval: 5s
+      start_period: 5s
+
+  telegram:
+    image: ${ASTER_IMAGE_NS:-aster}/aster-controller:${ASTER_VERSION:-dev}
+    container_name: aster-e2e-telegram
+    network_mode: host
+    restart: "no"
+    environment:
+      ASTER_E2E_TELEGRAM_PORT: "${ASTER_E2E_TELEGRAM_PORT:-8090}"
+    command: ["node", "/e2e/telegram-server.mjs"]
+    volumes:
+      - ${ASTER_REPO}/test/e2e/telegram-server.mjs:/e2e/telegram-server.mjs:ro
+      - ${ASTER_REPO}/packages/controller/test/telegram-fake.js:/e2e/telegram-fake.mjs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(Number(process.env.ASTER_E2E_TELEGRAM_PORT)+1)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      start_period: 3s
+      retries: 10

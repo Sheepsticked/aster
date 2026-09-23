@@ -1,0 +1,60 @@
+#!/bin/sh
+# Aster — aster-emit: write one validated event line to the spool atomically.
+#
+# Usage: aster-emit <kind> <modem_id> <uniqueid> [field...]
+#   kind      sms | call-end | sms-report
+#   modem_id  [a-z0-9_]+
+#   uniqueid  [A-Za-z0-9._-]*   Asterisk ${UNIQUEID}; becomes part of the file name
+#   field     [A-Za-z0-9+/=]*   base64 (x sentinel, or the driver's SMS_BASE64) or a bare token (report type/success)
+# An empty uniqueid or field is written as '-'. The number of fields is not checked here: a structurally wrong
+# line is still written and the ingester quarantines it, instead of the event being lost.
+# Exit 1 on invalid input (nothing is written) or when the file cannot be created, synced or renamed; System()
+# then sets SYSTEMSTATUS=APPERROR. Argument values are never echoed, so they cannot forge log lines.
+#
+# Output: ${ASTER_SPOOL:-/var/spool/aster}/events/<event_id>.evt, event_id = <epoch_ns>-<pid>-<uniqueid|->,
+# written as .tmp, synced, renamed to .evt, then the directory is synced. One TAB-separated line:
+#   1 <kind> <event_id> <modem_id> <emitted_epoch_s> <uniqueid|-> <f1|-> ... <fn|->
+set -eu
+umask 022
+
+tmp=
+fail() {
+  [ -z "$tmp" ] || rm -f "$tmp"
+  printf 'aster-emit: %s\n' "$1" >&2
+  exit 1
+}
+
+# Character sets are spelled out: bracket ranges such as [a-z] depend on the locale in some shells.
+lower=abcdefghijklmnopqrstuvwxyz
+upper=ABCDEFGHIJKLMNOPQRSTUVWXYZ
+digit=0123456789
+tab=$(printf '\t')
+
+[ $# -ge 3 ] || fail 'usage: aster-emit <sms|call-end|sms-report> <modem_id> <uniqueid> [field...]'
+kind=$1 modem=$2 uniqueid=${3:--}
+shift 3
+case $kind in sms | call-end | sms-report) ;; *) fail 'invalid kind' ;; esac
+case $modem in '' | *[!${lower}${digit}_]*) fail 'invalid modem id' ;; esac
+case $uniqueid in *[!${upper}${lower}${digit}._-]*) fail 'invalid uniqueid' ;; esac
+
+fields='' n=0
+for f in "$@"; do
+  n=$((n + 1))
+  case $f in *[!${upper}${lower}${digit}+/=]*) fail "invalid field $n (base64 characters only)" ;; esac
+  fields=$fields$tab${f:--}
+done
+
+ns=$(date +%s%N) || fail 'date failed'
+case $ns in '' | *[!${digit}]*) fail 'date +%s%N is not supported' ;; esac
+[ ${#ns} -gt 9 ] || fail 'date +%s%N is not supported'
+id=$ns-$$-$uniqueid
+dir=${ASTER_SPOOL:-/var/spool/aster}/events
+
+mkdir -p "$dir" || fail "cannot create $dir"
+tmp=$dir/$id.tmp
+printf '1\t%s\t%s\t%s\t%s\t%s%s\n' "$kind" "$id" "$modem" "${ns%?????????}" "$uniqueid" "$fields" >"$tmp" ||
+  fail "cannot write $tmp"
+sync "$tmp" || fail "cannot sync $tmp"
+mv "$tmp" "$dir/$id.evt" || fail "cannot rename $tmp"
+tmp=
+sync "$dir" || fail "cannot sync $dir (event file written, durability unknown)"

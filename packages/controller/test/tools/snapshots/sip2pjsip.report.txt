@@ -1,0 +1,10 @@
+test/fixtures/old/sip.conf: 15 of 15 peers converted
+
+how it was mapped:
+  - 501, 502, 503, 509, 510 → outbound: null (internal only)
+  - 504, 505, 506, 507, 508 → outbound: gsm1
+  - 511, 512, 513, 514, 515 → outbound: gsm2
+
+not carried over:
+  - peer settings with no registry equivalent: directrtpsetup — the same behaviour is in the pjsip.conf templates now, for every phone at once
+  - the secrets are the phone numbers themselves, as they were: rotate them on the Phones page after the cutover

@@ -1,0 +1,33 @@
+read:
+  test/fixtures/old/quectel.conf
+  test/fixtures/old/dongle.conf
+  test/fixtures/old/extensions.conf
+  test/fixtures/old/sip.conf
+
+wrote a registry with 2 modem(s) and 15 phone(s)
+
+how it was mapped:
+  - 501, 502, 503, 509, 510 → outbound: null (internal only)
+  - 504, 505, 506, 507, 508 → outbound: gsm1
+  - 511, 512, 513, 514, 515 → outbound: gsm2
+  - GSM1: ring 504, 505, 506, 507, 508 for 120 s (Dial of [phones] exten s)
+  - GSM2: ring 511, 512, 513, 514, 515 for 120 s (Dial of [phones1] exten s)
+  - Telegram recipients 111222333 (the sendEmail lines of extensions.conf)
+
+assumptions — check every one of these:
+  - no temp directory was given, so for every slot: the driver is dongle (what the old UI itself falls back to when it cannot read the type file) and the modem was running. Both are on the old host in /srv/asterisk/temp — tools/hw-probe.sh prints them
+  - GSM1: IMEI 490154203237542 taken from [GSM1] of dongle.conf
+  - GSM1: usb_port unknown — run Scan and Assign after the cutover
+  - GSM2: IMEI 356938035643817 taken from [GSM2] of dongle.conf
+  - GSM2: usb_port unknown — run Scan and Assign after the cutover
+  - settings.timezone stays UTC — the old appliance has no time zone setting; set it on the Settings page
+
+not carried over:
+  - peer settings with no registry equivalent: directrtpsetup — the same behaviour is in the pjsip.conf templates now, for every phone at once
+  - the secrets are the phone numbers themselves, as they were: rotate them on the Phones page after the cutover
+  - GSM1: +375290000010 rang the same group as s in [phones]: a DID no longer needs configuring — the generated ingress routes any DID to the ring group
+  - GSM2: +375330000020 rang the same group as s in [phones1]: a DID no longer needs configuring — the generated ingress routes any DID to the ring group
+  - the Telegram bot token: it is an environment variable of the old docker-compose.yml and belongs in data/config/secrets.env of the appliance (0600), which install.sh asks for — this tool deliberately does not read it. Rotate it: the old one is in the old repository's history
+  - the SMS history /var/lib/asterisk/sms_GSM.txt stays a file: copy it to data/state/old/ of the appliance
+
+review every line above, this file is a starting point, not a migration.

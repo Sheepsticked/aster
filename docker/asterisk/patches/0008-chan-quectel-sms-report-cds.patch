@@ -1,0 +1,865 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 00:00:00 +0000
+Subject: [PATCH] sms reports: receive delivery reports as +CDS (upstream PR
+ #75)
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: SMS delivery reports never reach Asterisk from a Quectel EC25.
+         With AT+CNMI=2,1,0,2,0 the modem keeps the report in its
+         separate "SR" storage, while the driver reads it with AT+CMGR
+         from "SM", finds nothing and says nothing. Every SMS sent with
+         Report: 1 then ends as a type 2 report (no report within the
+         validity) although it was delivered (applies on top of 0007).
+
+This is upstream pull request #75 by vskiwi, "SMS delivery reports:
+receive status reports via +CDS" (head e810ed6f6ca21e0445614239fa59a89ef9605085,
+open when taken), whole: driver, sample configurations, README and
+tests. Its hunks in at_command.c, at_response.h, dc_config.c and
+dc_config.h were placed by hand because 0001, 0004 and 0006 moved
+their context; the code is unchanged.
+
+The initialization sends AT+CNMI=2,1,0,1,0, so the modem passes each
+report at once as the two-line URC "+CDS: <length>" plus the PDU;
+at_read hands both lines over as one response (rb_find_nth_crlf) and
+at_response_cds() gives the report to the same smsdb matching, report
+channel and QuectelReport event as the +CDSI path, now shared in
+at_handle_status_report(). A PDU without an SMSC address (length
+octet 00) is accepted. New shared setting smsreport = cds | cdsi
+(default cds); a modem that answers ERROR to <ds>=1 continues with
+<ds>=2 and a warning, so its SMS keeps working as before.
+
+Aster adds RES_CDS to at_response_is_unsolicited() (0001), so a report
+that arrives during a QuectelAtCommand is not returned as that
+command's output.
+---
+ README.md        |  29 ++++++++++
+ at_command.c     |  18 +++++-
+ at_parse.c       |  91 ++++++++++++++++++++++++++++--
+ at_parse.h       |   2 +
+ at_read.c        |  14 +++++
+ at_response.c    | 140 ++++++++++++++++++++++++++++++++++++-----------
+ at_response.h    |   1 +
+ chan_quectel.c   |   1 +
+ chan_quectel.h   |   1 +
+ cli.c            |   1 +
+ dc_config.c      |  21 +++++++
+ dc_config.h      |   8 +++
+ etc/quectel.conf |  10 ++++
+ quectel.conf     |  10 ++++
+ ringbuffer.c     |  19 +++++++
+ ringbuffer.h     |   3 +
+ test/parse.c     |  91 ++++++++++++++++++++++++++++++
+ test/test1.c     |  51 +++++++++++++++++
+ 18 files changed, 471 insertions(+), 40 deletions(-)
+
+diff --git a/README.md b/README.md
+index adb19fe..902b4b0 100644
+--- a/README.md
++++ b/README.md
+@@ -109,6 +109,35 @@ How to store your own number:
+     quectel cmd quectel0 AT+CPBW=1,\"+123456789\",145
+ 
+ 
++SMS delivery reports:
++---------------------
++
++When an SMS is sent with the report flag (`QuectelSendSMS(...,yes,...)` or the
++`Report` header of the `QuectelSendSMS` AMI action), the network answers with an
++SMS-STATUS-REPORT for every part. chan_quectel matches it against the sent
++message and then fires the `report` extension in the device context (variables
++`SMS_REPORT_SUCCESS`, `SMS_REPORT`, `SMS_REPORT_PAYLOAD`, `SMS_REPORT_TS`,
++`SMS_REPORT_DT`) and the `QuectelReport` AMI event (`Type: 1`).
++
++    exten => report,1,Verbose(Delivery report for ${CALLERID(num)}: success=${SMS_REPORT_SUCCESS} status=${SMS_REPORT})
++    exten => report,n,Hangup()
++
++How the report reaches the driver is selected with the `smsreport` option
++(`[defaults]` or per device, default `cds`):
++
++* `smsreport=cds` (default): `AT+CNMI=2,1,0,1,0`, the modem passes the report
++  directly as a `+CDS: <length>` URC followed by the PDU. This is required for
++  Quectel EC25/EG25: they keep status reports in their separate "SR" storage but
++  announce them as `+CDSI: "SM",<index>`, so reading that index from "SM" returns
++  nothing (or an unrelated stored message) and the report used to be lost. See
++  <a href="https://forums.quectel.com/t/sms-delivery-reports-cannot-be-read-from-sim-storage-on-ec25-e-and-eg25-g/36955">this Quectel forum thread</a>.
++* `smsreport=cdsi`: `AT+CNMI=2,1,0,2,0`, the report is stored in the modem,
++  announced with `+CDSI` and read with `AT+CMGR` (the previous behaviour).
++
++If the modem answers `ERROR` to `<ds>=1`, a warning is logged and the device
++continues with `cdsi`, so SMS sending and receiving keep working either way.
++The raw URC is also published as the `QuectelNewCDS` AMI event.
++
+ Other CLI commands:
+ -------------------
+ 
+diff --git a/at_command.c b/at_command.c
+index 80298a9..700cedd 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -136,7 +136,17 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 	static const char cmd21[] = "AT+CSCS=\"UCS2\"\r";
+ 
+ 	static const char cmd22[] = "AT+CPMS=\"SM\",\"SM\",\"SM\"\r";
+-	static const char cmd23[] = "AT+CNMI=2,1,0,2,0\r";
++	/* <ds>=1 (smsreport=cds, default): SMS-STATUS-REPORTs are routed to the TE
++	 * directly as "+CDS: <len>\r\n<pdu>", see at_response_cds().
++	 * <ds>=2 (smsreport=cdsi): status reports are stored in the modem and
++	 * announced with "+CDSI: <mem>,<index>", then read with AT+CMGR.
++	 * Quectel EC25/EG25 keep status reports in their separate "SR" storage
++	 * but announce "+CDSI: "SM",0" - AT+CMGR on "SM" then reads nothing (or
++	 * an unrelated stored message), so with <ds>=2 the delivery reports were
++	 * silently lost on these modules. Modems answering ERROR to <ds>=1 fall
++	 * back to <ds>=2, see at_response_error(). */
++	static const char cmd23[] = "AT+CNMI=2,1,0,1,0\r";
++	static const char cmd23a[] = "AT+CNMI=2,1,0,2,0\r";
+ 	static const char cmd24[] = "AT+CSQ\r";
+ 
+ 	static const at_queue_cmd_t st_cmds[] = {
+@@ -236,6 +246,12 @@ EXPORT_DEF int at_enqueue_initialization(struct cpvt *cpvt, at_cmd_t from_comman
+ 				goto failure;
+ 			ptmp2 = cmds[out].data;
+ 		}
++		if(cmds[out].cmd == CMD_AT_CNMI && (CONF_SHARED(pvt, smsreport) == DC_SMSREPORT_CDSI || pvt->cnmi_cds_rejected))
++		{
++			/* legacy +CDSI status report indication */
++			cmds[out].data = (char*)cmd23a;
++			cmds[out].length = STRLEN(cmd23a);
++		}
+ 		if(cmds[out].cmd == from_command)
+ 			begin = out;
+ 		out++;
+diff --git a/at_parse.c b/at_parse.c
+index 1fbbf35..93cea1e 100644
+--- a/at_parse.c
++++ b/at_parse.c
+@@ -374,7 +374,6 @@ EXPORT_DEF int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, s
+ 	char *marks[STRLEN(delimiters)];
+ 	char *end;
+ 	size_t tpdu_length;
+-	int16_t msg16_tmp[256];
+ 
+ 	if (mark_line(str, delimiters, marks) != ITEMS_OF(marks)) {
+ 		chan_quectel_err = E_PARSE_CMGR_LINE;
+@@ -386,18 +385,98 @@ EXPORT_DEF int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, s
+ 	}
+ 	str = marks[2] + 1;
+ 
++	return at_parse_sms_pdu(str, tpdu_length, tpdu_type, sca, sca_len, oa, oa_len, scts, mr, st, dt, msg, msg_len, udh);
++}
++
++/*!
++ * \brief Parse a +CDS unsolicited status report (PDU mode)
++ * \param str -- string to parse (null terminated), modified in place
++ * \param len -- string length
++ * \retval  0 success
++ * \retval -1 parse error (chan_quectel_err set)
++ *
++ * The other output parameters are the same as for at_parse_cmgr(); a status
++ * report fills tpdu_type, sca, oa (recipient address), mr, scts, dt and st.
++ */
++EXPORT_DEF int at_parse_cds(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh)
++{
++	/*
++	 * +CDS: <TPDU_length><CR><LF>
++	 * SMSC_number_and_TPDU
++	 *
++	 *	sample (SMSC address present)
++	 * +CDS: 25
++	 * 07919700000000F0060B0B919700000000F1629051023294216290510232942100
++	 *
++	 *	sample (SMSC address absent, length octet 00 - Quectel EC25 firmware EC25EFAR06A15M4G)
++	 * +CDS: 25
++	 * 00060B0B919700000000F1629051023294216290510232942100
++	 */
++	char *end;
++	size_t tpdu_length;
++
++	/* skip "+CDS:" */
++	str += 5;
++	len -= 5;
++
++	/* skip leading spaces */
++	while (len > 0 && *str == ' ') {
++		++str;
++		--len;
++	}
++
++	if (len <= 0) {
++		chan_quectel_err = E_PARSE_CMGR_LINE;
++		return -1;
++	}
++
++	tpdu_length = strtol(str, &end, 10);
++	if (tpdu_length <= 0 || end[0] != '\r') {
++		chan_quectel_err = E_INVALID_TPDU_LENGTH;
++		return -1;
++	}
++	str = end + 1;
++	if (str[0] == '\n') {
++		++str;
++	}
++
++	return at_parse_sms_pdu(str, tpdu_length, tpdu_type, sca, sca_len, oa, oa_len, scts, mr, st, dt, msg, msg_len, udh);
++}
++
++/*!
++ * \brief Decode a hex SMSC+TPDU string (SMS-DELIVER or SMS-STATUS-REPORT)
++ * \param str -- null-terminated hex string, decoded in place
++ * \param tpdu_length -- TPDU length announced by the modem (without SMSC part)
++ * \retval  0 success
++ * \retval -1 parse error (chan_quectel_err set)
++ */
++EXPORT_DEF int at_parse_sms_pdu(char *str, size_t tpdu_length, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh)
++{
++	int16_t msg16_tmp[256];
++
+ 	int pdu_length = (unhex(str, str) + 1) / 2;
+ 	if (pdu_length < 0) {
+ 		chan_quectel_err = E_MALFORMED_HEXSTR;
+ 		return -1;
+ 	}
+ 	int res, i = 0;
+-	res = pdu_parse_sca(str + i, pdu_length - i, sca, sca_len);
+-	if (res < 0) {
+-		/* tpdu_parse_sca sets chan_quectel_err */
+-		return -1;
++	if (pdu_length > 0 && str[0] == 0) {
++		/* no SMSC address (length octet 0): some Quectel firmwares deliver
++		 * +CDS status reports this way (EC25EFAR06A15M4G) while others include
++		 * the SMSC address (EC25EFAR06A10M4G); pdu_parse_sca() would reject
++		 * the empty address with E_INVALID_SCA */
++		if (sca_len > 0) {
++			sca[0] = '\0';
++		}
++		i = 1;
++	} else {
++		res = pdu_parse_sca(str + i, pdu_length - i, sca, sca_len);
++		if (res < 0) {
++			/* tpdu_parse_sca sets chan_quectel_err */
++			return -1;
++		}
++		i += res;
+ 	}
+-	i += res;
+ 	if (tpdu_length > pdu_length - i) {
+ 		chan_quectel_err = E_INVALID_TPDU_LENGTH;
+ 		return -1;
+diff --git a/at_parse.h b/at_parse.h
+index ca95f6a..0f0adcc 100644
+--- a/at_parse.h
++++ b/at_parse.h
+@@ -18,6 +18,8 @@ EXPORT_DECL int at_parse_creg (char* str, unsigned len, int* gsm_reg, int* gsm_r
+ EXPORT_DECL int at_parse_cmti (const char* str);
+ EXPORT_DECL int at_parse_cdsi (const char* str);
+ EXPORT_DECL int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh);
++EXPORT_DECL int at_parse_cds(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh);
++EXPORT_DECL int at_parse_sms_pdu(char *str, size_t tpdu_length, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh);
+ EXPORT_DECL int at_parse_cmgs (const char* str);
+ EXPORT_DECL int at_parse_cusd (char* str, int * type, char ** cusd, int * dcs);
+ EXPORT_DECL int at_parse_cpin (char* str, size_t len);
+diff --git a/at_read.c b/at_read.c
+index ee79faa..e48db72 100644
+--- a/at_read.c
++++ b/at_read.c
+@@ -178,6 +178,20 @@ EXPORT_DEF int at_read_result_iov (const char * dev, int * read_result, struct r
+ 
+ 				return iovcnt;
+ 			}
++			else if (rb_memcmp (rb, "+CDS:", 5) == 0)
++			{
++				/* unsolicited SMS-STATUS-REPORT (AT+CNMI <ds>=1), two lines
++				 * without a trailing OK: "+CDS: <len>\r\n<pdu>\r\n".
++				 * Hand both lines over (up to and including the '\r' of the
++				 * PDU line, like the single-line case); wait for more data
++				 * while the PDU line is incomplete. */
++				ssize_t off = rb_find_nth_crlf (rb, 2);
++				if (off > 0)
++				{
++					*read_result = 0;
++					return rb_read_n_iov (rb, iov, (size_t) off + 1);
++				}
++			}
+ 			else
+ 			{
+ 				iovcnt = rb_read_until_mem_iov (rb, iov, "\r\n", 2);
+diff --git a/at_response.c b/at_response.c
+index ee0ce80..3c20e81 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -87,6 +87,7 @@ static int at_response_is_unsolicited (at_res_t res)
+ 		case RES_RCEND:
+ 		case RES_CMTI:
+ 		case RES_CDSI:
++		case RES_CDS:
+ 		case RES_SMMEMFULL:
+ 			return 1;
+ 		default:
+@@ -608,9 +609,23 @@ static int at_response_error (struct pvt* pvt, at_res_t res, const char* str)
+ 				log_cmd_response_error(pvt, ecmd, "[%s] Error Supplementary Service Notification activation failed\n", PVT_ID(pvt));
+ 				goto e_return;
+ 
++			case CMD_AT_CNMI:
++				if (CONF_SHARED(pvt, smsreport) == DC_SMSREPORT_CDS && !pvt->cnmi_cds_rejected)
++				{
++					/* "AT+CNMI=2,1,0,1,0" (status reports as +CDS) rejected by
++					 * this modem: continue initialization with <ds>=2 (+CDSI),
++					 * SMS must keep working even without delivery reports */
++					pvt->cnmi_cds_rejected = 1;
++					ast_log (LOG_WARNING, "[%s] AT+CNMI with <ds>=1 (+CDS status reports) rejected, falling back to <ds>=2 (+CDSI) - delivery reports may be lost, consider smsreport=cdsi\n", PVT_ID(pvt));
++					if (at_enqueue_initialization(task->cpvt, CMD_AT_CNMI) == 0)
++					{
++						break;
++					}
++					log_cmd_response_error(pvt, ecmd, "[%s] Error schedule initialization commands\n", PVT_ID(pvt));
++				}
++				/* fall through */
+ 			case CMD_AT_CMGF:
+ 			case CMD_AT_CPMS:
+-			case CMD_AT_CNMI:
+ 				ast_debug (1, "[%s] Command '%s' failed\n", PVT_ID(pvt), at_cmd2str (ecmd->cmd));
+ 				ast_debug (1, "[%s] No SMS support\n", PVT_ID(pvt));
+ 
+@@ -1588,6 +1603,94 @@ static int at_response_cdsi (struct pvt* pvt, const char* str)
+ 	return 0;
+ }
+ 
++/*!
++ * \brief Process a decoded SMS-STATUS-REPORT (from +CMGR or +CDS)
++ * \param pvt -- pvt structure
++ * \param oa -- recipient address the report refers to
++ * \param mr -- message reference of the reported SMS-SUBMIT part
++ * \param st -- TP-Status
++ * \param scts -- service centre time stamp
++ * \param dt -- discharge time
++ *
++ * Matches the part in smsdb; when all parts of the message are reported,
++ * fires the "report" local channel and the QuectelReport AMI event (Type 1).
++ */
++static void at_handle_status_report (struct pvt* pvt, const char *oa, int mr, int st, const char *scts, const char *dt)
++{
++	char payload[SMSDB_PAYLOAD_MAX_LEN];
++	ssize_t payload_len;
++	int status_report[256];
++
++	ast_verb(1, "[%s] Got status report with ref %d from %s and status code %d\n", PVT_ID(pvt), mr, oa, st);
++	payload_len = smsdb_outgoing_part_status(pvt->imsi, oa, mr, st, status_report, payload);
++	if (payload_len >= 0) {
++		int success = 1;
++		char status_report_str[255 * 4 + 1];
++		int srroff = 0;
++		for (int i = 0; status_report[i] != -1; ++i) {
++			success &= !(status_report[i] & 0x40);
++			sprintf(status_report_str + srroff, "%03d,", status_report[i]);
++			srroff += 4;
++		}
++		status_report_str[srroff] = '\0';
++		ast_verb(1, "[%s] Success: %d; Payload: %.*s; Report string: %s\n", PVT_ID(pvt), success, (int) payload_len, payload, status_report_str);
++		payload[payload_len] = '\0';
++		channel_var_t vars[] =
++		{
++			{ "SMS_REPORT_PAYLOAD", payload } ,
++			{ "SMS_REPORT_TS", (char*) scts },
++			{ "SMS_REPORT_DT", (char*) dt },
++			{ "SMS_REPORT_SUCCESS", success ? "1" : "0" },
++			{ "SMS_REPORT_TYPE", "e" },
++			{ "SMS_REPORT", status_report_str },
++			{ NULL, NULL },
++		};
++		start_local_channel(pvt, "report", oa, vars);
++		manager_event_report(PVT_ID(pvt), payload, payload_len, scts, dt, success, 1, status_report_str);
++	} else {
++		ast_debug (1, "[%s] Status report ref %d for %s does not match a pending outgoing part (already reported, expired or not ours)\n", PVT_ID(pvt), mr, oa);
++	}
++}
++
++/*!
++ * \brief Handle +CDS unsolicited status report (AT+CNMI <ds>=1, smsreport=cds)
++ * \param pvt -- pvt structure
++ * \param str -- "+CDS: <len>\r\n<pdu>" (null terminated), modified in place
++ * \param len -- string length
++ * \retval  0 always (a malformed report must not disconnect the device)
++ */
++
++static int at_response_cds (struct pvt* pvt, char * str, size_t len)
++{
++	char		oa[512] = "", sca[512] = "";
++	char		scts[64] = "", dt[64] = "";
++	int		mr = 0, st = 0;
++	char		msg[4096];
++	size_t		msg_len = sizeof(msg);
++	int		tpdu_type = 0;
++	pdu_udh_t	udh;
++	pdu_udh_init(&udh);
++
++	if (CONF_SHARED(pvt, disablesms))
++	{
++		ast_log (LOG_WARNING, "[%s] SMS reception has been disabled in the configuration.\n", PVT_ID(pvt));
++		return 0;
++	}
++
++	manager_event_message("QuectelNewCDS", PVT_ID(pvt), str);
++
++	if (at_parse_cds(str, len, &tpdu_type, sca, sizeof(sca), oa, sizeof(oa), scts, &mr, &st, dt, msg, &msg_len, &udh) < 0) {
++		ast_log(LOG_WARNING, "[%s] Error parsing status report: %s\n", PVT_ID(pvt), error2str(chan_quectel_err));
++		return 0;
++	}
++	if (PDUTYPE_MTI(tpdu_type) != PDUTYPE_MTI_SMS_STATUS_REPORT) {
++		ast_log(LOG_WARNING, "[%s] +CDS carries a non status-report PDU (type 0x%02x), ignoring\n", PVT_ID(pvt), tpdu_type);
++		return 0;
++	}
++	at_handle_status_report(pvt, oa, mr, st, scts, dt);
++	return 0;
++}
++
+ /*!
+  * \brief Handle +CMGR response
+  * \param pvt -- pvt structure
+@@ -1612,10 +1715,6 @@ static int at_response_cmgr (struct pvt* pvt, const char * str, size_t len)
+ 	char fullmsg[160 * 255];
+ 	int fullmsg_len;
+ 	int csms_cnt;
+-	char buf[512];
+-	char payload[SMSDB_PAYLOAD_MAX_LEN];
+-	ssize_t payload_len;
+-	int status_report[256];
+ 
+ 	const struct at_queue_cmd * ecmd = at_queue_head_cmd(pvt);
+ 
+@@ -1631,34 +1730,7 @@ static int at_response_cmgr (struct pvt* pvt, const char * str, size_t len)
+ 			}
+ 			switch (PDUTYPE_MTI(tpdu_type)) {
+ 			case PDUTYPE_MTI_SMS_STATUS_REPORT:
+-				ast_verb(1, "[%s] Got status report with ref %d from %s and status code %d\n", PVT_ID(pvt), mr, oa, st);
+-				snprintf(buf, 64, "Delivered\r\nForeignID: %d", mr);
+-				payload_len = smsdb_outgoing_part_status(pvt->imsi, oa, mr, st, status_report, payload);
+-				if (payload_len >= 0) {
+-					int success = 1;
+-					char status_report_str[255 * 4 + 1];
+-					int srroff = 0;
+-					for (int i = 0; status_report[i] != -1; ++i) {
+-						success &= !(status_report[i] & 0x40);
+-						sprintf(status_report_str + srroff, "%03d,", status_report[i]);
+-						srroff += 4;
+-					}
+-					status_report_str[srroff] = '\0';
+-					ast_verb(1, "[%s] Success: %d; Payload: %.*s; Report string: %s\n", PVT_ID(pvt), success, (int) payload_len, payload, status_report_str);
+-					payload[payload_len] = '\0';
+-					channel_var_t vars[] =
+-					{
+-						{ "SMS_REPORT_PAYLOAD", payload } ,
+-						{ "SMS_REPORT_TS", scts },
+-						{ "SMS_REPORT_DT", dt },
+-						{ "SMS_REPORT_SUCCESS", success ? "1" : "0" },
+-						{ "SMS_REPORT_TYPE", "e" },
+-						{ "SMS_REPORT", status_report_str },
+-						{ NULL, NULL },
+-					};
+-					start_local_channel(pvt, "report", oa, vars);
+-					manager_event_report(PVT_ID(pvt), payload, payload_len, scts, dt, success, 1, status_report_str);
+-				}
++				at_handle_status_report(pvt, oa, mr, st, scts, dt);
+ 				break;
+ 			case PDUTYPE_MTI_SMS_DELIVER:
+ 				ast_debug (1, "[%s] Successfully read SM\n", PVT_ID(pvt));
+@@ -2275,6 +2347,8 @@ int at_response (struct pvt* pvt, const struct iovec iov[2], int iovcnt, at_res_
+ */
+ 			case RES_CDSI:
+ 				return at_response_cdsi (pvt, str);
++			case RES_CDS:
++				return at_response_cds (pvt, str, len);
+ 			case RES_CMTI:
+ 				return at_response_cmti (pvt, str);
+ 
+diff --git a/at_response.h b/at_response.h
+index 7a302d0..2322e97 100644
+--- a/at_response.h
++++ b/at_response.h
+@@ -26,6 +26,7 @@ struct iovec;
+ 	_( CME_ERROR,   "+CME ERROR",   "+CME ERROR:") \
+ 	_( CMTI,        "+CMTI",        "+CMTI:") \
+ 	_( CDSI,        "+CDSI",        "+CDSI:") \
++	_( CDS,         "+CDS",         "+CDS:") \
+ 	_( CFUN,        "+CFUN",        "+CFUN:") \
+ \
+ 	_( CNUM,        "+CNUM",        "+CNUM:") \
+diff --git a/chan_quectel.c b/chan_quectel.c
+index e07136b..07b7719 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -506,6 +506,7 @@ static void disconnect_quectel (struct pvt* pvt)
+ 
+ 		pvt->gsm_registered	= 0;
+ 		pvt->has_sms = 0;
++		pvt->cnmi_cds_rejected = 0;
+ 		pvt->has_voice = 0;
+ 		pvt->has_call_waiting = 0;
+ 	}
+diff --git a/chan_quectel.h b/chan_quectel.h
+index b59d9e9..8fb47a0 100644
+--- a/chan_quectel.h
++++ b/chan_quectel.h
+@@ -217,6 +217,7 @@ typedef struct pvt
+ #define VOLUME_SYNC_DONE	3
+ 
+ 	unsigned int		has_sms:1;			/*!< device has SMS support */
++	unsigned int		cnmi_cds_rejected:1;		/*!< AT+CNMI <ds>=1 (+CDS status reports) rejected by device, using <ds>=2 (+CDSI) */
+ 	unsigned int		has_voice:1;			/*!< device has voice call support */
+ 	unsigned int		is_simcom:1;			/*!< device is a simcom module */
+         long                    t0;
+diff --git a/cli.c b/cli.c
+index 07402f7..4b5531d 100644
+--- a/cli.c
++++ b/cli.c
+@@ -146,6 +146,7 @@ static char* cli_show_device_settings (struct ast_cli_entry* e, int cmd, struct
+ 		ast_cli (a->fd, "  Default CallingPres     : %s\n", CONF_SHARED(pvt, callingpres) < 0 ? "<Not set>" : ast_describe_caller_presentation (CONF_SHARED(pvt, callingpres)));
+ 		ast_cli (a->fd, "  Auto delete SMS         : %s\n", CONF_SHARED(pvt, autodeletesms) ? "Yes" : "No");
+ 		ast_cli (a->fd, "  Disable SMS             : %s\n", CONF_SHARED(pvt, disablesms) ? "Yes" : "No");
++		ast_cli (a->fd, "  SMS status reports      : %s\n", dc_smsreport_setting2str(CONF_SHARED(pvt, smsreport)));
+ 		ast_cli (a->fd, "  Reset Quectel            : %s\n", CONF_SHARED(pvt, resetquectel) ? "Yes" : "No");
+ 		ast_cli (a->fd, "  Call Waiting            : %s\n", dc_cw_setting2str(CONF_SHARED(pvt, callwaiting)));
+ 		ast_cli (a->fd, "  DTMF                    : %s\n", dc_dtmf_setting2str(CONF_SHARED(pvt, dtmf)));
+diff --git a/dc_config.c b/dc_config.c
+index 48e3aec..ab3bc2e 100644
+--- a/dc_config.c
++++ b/dc_config.c
+@@ -26,6 +26,18 @@ EXPORT_DEF const char * dc_dtmf_setting2str(dc_dtmf_setting_t dtmf)
+ 	return enum2str(dtmf, dtmf_values, ITEMS_OF(dtmf_values));
+ }
+ 
++static const char * const smsreport_values[] = { "cds", "cdsi" };
++
++EXPORT_DEF int dc_smsreport_str2setting(const char * value)
++{
++	return str2enum(value, smsreport_values, ITEMS_OF(smsreport_values));
++}
++
++EXPORT_DEF const char * dc_smsreport_setting2str(dc_smsreport_t smsreport)
++{
++	return enum2str(smsreport, smsreport_values, ITEMS_OF(smsreport_values));
++}
++
+ static const char * const radio_values[] = { "keep", "on", "off" };
+ 
+ EXPORT_DEF int dc_radio_str2setting(const char * value)
+@@ -110,6 +122,7 @@ EXPORT_DEF void dc_sconfig_fill_defaults(struct dc_sconfig * config)
+ 	config->initstate		= DEV_STATE_STARTED;
+ 	config->callwaiting 		= CALL_WAITING_AUTO;
+ 	config->dtmf			= DC_DTMF_SETTING_RELAX;
++	config->smsreport		= DC_SMSREPORT_CDS;
+ 	config->radio			= DC_RADIO_KEEP;
+ 
+ 	config->mindtmfgap		= DEFAULT_MINDTMFGAP;
+@@ -222,6 +235,14 @@ EXPORT_DEF void dc_sconfig_fill(struct ast_config * cfg, const char * cat, struc
+ 			else
+ 				ast_log(LOG_ERROR, "Invalid value for 'dtmf': '%s', setting default 'relax'\n", v->value);
+ 		}
++		else if (!strcasecmp (v->name, "smsreport"))
++		{
++			int val = dc_smsreport_str2setting(v->value);
++			if(val >= 0)
++				config->smsreport = val;
++			else
++				ast_log(LOG_ERROR, "Invalid value for 'smsreport': '%s', must be one of 'cds' 'cdsi' default is 'cds'\n", v->value);
++		}
+ 		else if (!strcasecmp (v->name, "radio"))
+ 		{
+ 			int val = dc_radio_str2setting(v->value);
+diff --git a/dc_config.h b/dc_config.h
+index dc1c6b3..065e615 100644
+--- a/dc_config.h
++++ b/dc_config.h
+@@ -44,6 +44,11 @@ typedef enum {
+ 	DC_DTMF_SETTING_RELAX,
+ } dc_dtmf_setting_t;
+ 
++typedef enum {
++	DC_SMSREPORT_CDS = 0,		/*!< AT+CNMI <ds>=1: status reports delivered to the TE as "+CDS: <len>\r\n<pdu>" */
++	DC_SMSREPORT_CDSI,		/*!< AT+CNMI <ds>=2: status reports stored in the modem, "+CDSI: <mem>,<index>" then AT+CMGR */
++} dc_smsreport_t;
++
+ /* The radio functionality a started device is initialized with (Aster radio patch, docker/asterisk/patches/README.md) */
+ typedef enum {
+ 	DC_RADIO_KEEP = 0,		/*!< no AT+CFUN: the modem keeps whatever it has (upstream behaviour) */
+@@ -90,6 +95,7 @@ typedef struct dc_sconfig
+ 
+ 	call_waiting_t		callwaiting;			/*!< enable/disable/auto call waiting CALL_WAITING_AUTO */
+ 	dc_dtmf_setting_t	dtmf;				/*!< off/inband/relax incoming DTMF detection, default DC_DTMF_SETTING_RELAX */
++	dc_smsreport_t		smsreport;			/*!< cds/cdsi how SMS status reports are received, default DC_SMSREPORT_CDS */
+ 	dc_radio_setting_t	radio;				/*!< keep/on/off radio functionality at initialization, default DC_RADIO_KEEP */
+ 
+ 	int			mindtmfgap;			/*!< minimal time in ms from end of previews DTMF and begining of next */
+@@ -139,6 +145,8 @@ typedef struct pvt_config
+ 
+ EXPORT_DECL int dc_dtmf_str2setting(const char * str);
+ EXPORT_DECL const char * dc_dtmf_setting2str(dc_dtmf_setting_t dtmf);
++EXPORT_DECL int dc_smsreport_str2setting(const char * str);
++EXPORT_DECL const char * dc_smsreport_setting2str(dc_smsreport_t smsreport);
+ EXPORT_DECL int dc_radio_str2setting(const char * str);
+ EXPORT_DECL const char * dc_radio_setting2str(dc_radio_setting_t radio);
+ EXPORT_DECL void dc_sconfig_fill_defaults(struct dc_sconfig * config);
+diff --git a/etc/quectel.conf b/etc/quectel.conf
+index 07776db..cb385c9 100644
+--- a/etc/quectel.conf
++++ b/etc/quectel.conf
+@@ -55,6 +55,16 @@ disablesms=no			; disable of SMS reading from device when received
+ 				;  call chan_quectel might crash. Enable this option to disable sms reception.
+ 				;  default = no
+ 
++smsreport=cds			; how SMS delivery (status) reports are received from the device, possible values:
++				;   cds  - AT+CNMI=2,1,0,1,0: the report is passed directly as a "+CDS: <len>" URC with the PDU
++				;          on the next line (3GPP TS 27.005 <ds>=1). Required for Quectel EC25/EG25, which store
++				;          reports in their separate "SR" memory but announce them as +CDSI: "SM",<index> - reading
++				;          that index from "SM" returns nothing and the report was lost.
++				;   cdsi - AT+CNMI=2,1,0,2,0: the report is stored in the device, announced with +CDSI and read
++				;          with AT+CMGR (old behaviour, for devices where "cds" does not work as expected).
++				;  If the device answers ERROR to <ds>=1, chan_quectel logs a warning and falls back to "cdsi".
++				;  default is 'cds'
++
+ language=en			; set channel default language
+ mindtmfgap=45			; minimal interval from end of previews DTMF from begining of next in ms
+ mindtmfduration=80		; minimal DTMF tone duration in ms
+diff --git a/quectel.conf b/quectel.conf
+index a6c802f..f4b129a 100644
+--- a/quectel.conf
++++ b/quectel.conf
+@@ -55,6 +55,16 @@ disablesms=no			; disable of SMS reading from device when received
+ 				;  call chan_quectel might crash. Enable this option to disable sms reception.
+ 				;  default = no
+ 
++smsreport=cds			; how SMS delivery (status) reports are received from the device, possible values:
++				;   cds  - AT+CNMI=2,1,0,1,0: the report is passed directly as a "+CDS: <len>" URC with the PDU
++				;          on the next line (3GPP TS 27.005 <ds>=1). Required for Quectel EC25/EG25, which store
++				;          reports in their separate "SR" memory but announce them as +CDSI: "SM",<index> - reading
++				;          that index from "SM" returns nothing and the report was lost.
++				;   cdsi - AT+CNMI=2,1,0,2,0: the report is stored in the device, announced with +CDSI and read
++				;          with AT+CMGR (old behaviour, for devices where "cds" does not work as expected).
++				;  If the device answers ERROR to <ds>=1, chan_quectel logs a warning and falls back to "cdsi".
++				;  default is 'cds'
++
+ language=en			; set channel default language
+ mindtmfgap=45			; minimal interval from end of previews DTMF from begining of next in ms
+ mindtmfduration=80		; minimal DTMF tone duration in ms
+diff --git a/ringbuffer.c b/ringbuffer.c
+index f8ce01a..a64f394 100644
+--- a/ringbuffer.c
++++ b/ringbuffer.c
+@@ -227,6 +227,25 @@ EXPORT_DEF int rb_read_until_mem_iov (const struct ringbuffer* rb, struct iovec
+ 	return 0;
+ }
+ 
++EXPORT_DEF ssize_t rb_find_nth_crlf (const struct ringbuffer* rb, unsigned n)
++{
++	size_t	i;
++	int	prev_cr = 0;
++
++	for (i = 0; i < rb->used; ++i)
++	{
++		char c = ((const char*) rb->buffer)[(rb->read + i) % rb->size];
++
++		if (prev_cr && c == '\n' && --n == 0)
++		{
++			return (ssize_t) (i - 1);
++		}
++		prev_cr = (c == '\r');
++	}
++
++	return -1;
++}
++
+ EXPORT_DEF size_t rb_read_upd (struct ringbuffer* rb, size_t len)
+ {
+ 	size_t s;
+diff --git a/ringbuffer.h b/ringbuffer.h
+index 98170fc..6f78750 100644
+--- a/ringbuffer.h
++++ b/ringbuffer.h
+@@ -55,6 +55,9 @@ EXPORT_DECL int rb_read_n_iov (const struct ringbuffer* rb, struct iovec* iov, s
+ EXPORT_DECL int rb_read_until_char_iov (const struct ringbuffer*, struct iovec iov[2], char);
+ EXPORT_DECL int rb_read_until_mem_iov (const struct ringbuffer*, struct iovec iov[2], const void*, size_t);
+ 
++/*!< offset (from read position) of the n-th "\r\n" in buffered data or -1 if fewer than n line terminators are buffered */
++EXPORT_DECL ssize_t rb_find_nth_crlf (const struct ringbuffer* rb, unsigned n);
++
+ /*!< advice read position to len bytes */
+ EXPORT_DECL size_t rb_read_upd (struct ringbuffer* rb, size_t len);
+ 
+diff --git a/test/parse.c b/test/parse.c
+index db39110..96fb8f8 100644
+--- a/test/parse.c
++++ b/test/parse.c
+@@ -330,6 +330,96 @@ void test_parse_cmgr()
+ 	fprintf(stderr, "\n");
+ }
+ 
++#/* */
++void test_parse_cds()
++{
++	struct result {
++		int		res;
++		char		* sca;
++		char		* oa;
++		int		mr;
++		int		st;
++		const char	* scts;
++		const char	* dt;
++	};
++	static const struct test_case {
++		const char	* input;
++		struct result 	result;
++	} cases[] = {
++		/* Quectel EC25 (EC25EFAR06A10M4G), SMSC address present, delivered */
++		{ "+CDS: 25\r\n07919700000000F006120B919700000000F2629071118081216290711180912100",
++			{ 0, "+79000000000", "+79000000002", 18, 0x00, "2026-09-17 11:08:18 +03:00", "2026-09-17 11:08:19 +03:00" } },
++		/* Quectel EC25 (EC25EFAR06A15M4G), SMSC address absent (length octet 00), delivered */
++		{ "+CDS: 25\r\n0006510B919700000000F1629071018445216290710184652100",
++			{ 0, "", "+79000000001", 81, 0x00, "2026-09-17 10:48:54 +03:00", "2026-09-17 10:48:56 +03:00" } },
++		/* no space after colon */
++		{ "+CDS:25\r\n0006510B919700000000F1629071018445216290710184652100",
++			{ 0, "", "+79000000001", 81, 0x00, "2026-09-17 10:48:54 +03:00", "2026-09-17 10:48:56 +03:00" } },
++		/* permanent failure, TP-Status 0x46 */
++		{ "+CDS: 25\r\n0006520B919700000000F1629071015565216290710155752146",
++			{ 0, "", "+79000000001", 82, 0x46, "2026-09-17 10:55:56 +03:00", "2026-09-17 10:55:57 +03:00" } },
++		/* missing TPDU length */
++		{ "+CDS: \r\n0006510B919700000000F1629071018445216290710184652100",
++			{ -1, "", "", 0, 0, "", "" } },
++		/* PDU line missing */
++		{ "+CDS: 25",
++			{ -1, "", "", 0, 0, "", "" } },
++		/* announced TPDU length longer than PDU */
++		{ "+CDS: 26\r\n0006510B919700000000F1629071018445216290710184652100",
++			{ -1, "", "", 0, 0, "", "" } },
++	};
++
++	unsigned idx = 0;
++	char * input;
++	struct result result;
++	char oa[200], sca[200], scts[64], dt[64];
++	char msg[4096];
++	size_t msg_len;
++	int tpdu_type;
++	pdu_udh_t udh;
++	const char * msg_str;
++
++	result.oa = oa;
++	result.sca = sca;
++	result.scts = scts;
++	result.dt = dt;
++	for (; idx < ITEMS_OF(cases); ++idx) {
++		int failidx = 0;
++		input = strdup(cases[idx].input);
++		oa[0] = sca[0] = scts[0] = dt[0] = '\0';
++		result.mr = result.st = 0;
++		msg_len = sizeof(msg);
++		pdu_udh_init(&udh);
++
++		fprintf(stderr, "/* %u */ %s(\"%s\")...", idx, "at_parse_cds", input);
++		result.res = at_parse_cds(
++			input, strlen(input), &tpdu_type, sca, sizeof(sca), oa, sizeof(oa), scts, &result.mr, &result.st, dt,
++			msg, &msg_len, &udh);
++
++		if (++failidx && result.res == cases[idx].result.res &&
++		    (result.res != 0 ||
++		    (++failidx && PDUTYPE_MTI(tpdu_type) == PDUTYPE_MTI_SMS_STATUS_REPORT &&
++		     ++failidx && strcmp(result.sca, cases[idx].result.sca) == 0 &&
++		     ++failidx && strcmp(result.oa, cases[idx].result.oa) == 0 &&
++		     ++failidx && result.mr == cases[idx].result.mr &&
++		     ++failidx && result.st == cases[idx].result.st &&
++		     ++failidx && strcmp(result.scts, cases[idx].result.scts) == 0 &&
++		     ++failidx && strcmp(result.dt, cases[idx].result.dt) == 0)))
++		{
++			msg_str = "OK";
++			ok++;
++			failidx = 0;
++		} else {
++			msg_str = "FAIL";
++			faults++;
++		}
++		fprintf(stderr, " = %d ('%s','%s',%d,0x%02x,'%s','%s') [fail@%d]\t%s\n",
++			result.res, result.sca, result.oa, result.mr, result.st, result.scts, result.dt, failidx, msg_str);
++		free(input);
++	}
++	fprintf(stderr, "\n");
++}
++
+ #/* */
+ void test_parse_cusd()
+ {
+@@ -467,6 +557,7 @@ int main()
+ 	test_parse_cops();
+ 	test_parse_creg();
+ 	test_parse_cmti();
++	test_parse_cds();
+ 	test_parse_cmgr();
+ 	test_parse_cusd();
+ 	test_parse_cpin();
+diff --git a/test/test1.c b/test/test1.c
+index 0f65525..6392d17 100644
+--- a/test/test1.c
++++ b/test/test1.c
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <string.h>
+ #include "mixbuffer.h"
+ #include "helpers.h"
+ 
+@@ -95,9 +96,59 @@ void test_suite1()
+ 	
+ }
+ 
++#/* */
++int test_rb_find_nth_crlf()
++{
++	/* two-line "+CDS: <len>\r\n<pdu>\r\n" URC, see at_read_result_iov() */
++	static const struct test_case {
++		const char	* data;
++		size_t		start;		/* read position, to test wrapping around the end of the buffer */
++		unsigned	n;
++		ssize_t		result;
++	} cases[] = {
++		{ "+CDS: 25\r\nABCDEF\r\n",			 0, 2, 16 },	/* two complete lines */
++		{ "+CDS: 25\r\nABCDEF\r\n",			 0, 1,  8 },	/* first terminator */
++		{ "+CDS: 25\r\nABCDEF\r\n",			58, 2, 16 },	/* wrapped around the end of the ring */
++		{ "+CDS: 25\r\nABC",				 0, 2, -1 },	/* PDU line incomplete */
++		{ "+CDS: 25\r\nABCDEF\r",			 0, 2, -1 },	/* only the '\r' of the PDU line arrived */
++		{ "+CDS: 25\r\nABCDEF\r\n\r\n+CMTI: \"SM\",0\r\n",	 0, 2, 16 },	/* next URC already buffered, stop at 2nd terminator */
++		{ "",						 0, 1, -1 },
++	};
++	char buffer[64];
++	struct ringbuffer rb;
++	unsigned idx;
++	int faults = 0;
++
++	fprintf(stderr, "Testing rb_find_nth_crlf()\n");
++	for(idx = 0; idx < ITEMS_OF(cases); idx++)
++	{
++		size_t len = strlen(cases[idx].data);
++		size_t i;
++		ssize_t res;
++
++		memset(buffer, 'X', sizeof(buffer));
++		rb_init(&rb, buffer, sizeof(buffer));
++		rb.read = rb.write = cases[idx].start;
++		for(i = 0; i < len; i++)
++			buffer[(cases[idx].start + i) % sizeof(buffer)] = cases[idx].data[i];
++		rb.used = len;
++		rb.write = (cases[idx].start + len) % sizeof(buffer);
++
++		res = rb_find_nth_crlf(&rb, cases[idx].n);
++		fprintf(stderr, "/* %u */ rb_find_nth_crlf(start %2u, n %u) = %3d\t%s\n", idx, (unsigned)cases[idx].start, cases[idx].n, (int)res, res == cases[idx].result ? "OK" : "FAIL");
++		if(res != cases[idx].result)
++			faults++;
++	}
++	fprintf(stderr, "\n");
++	return faults;
++}
++
+ #/* */
+ int main()
+ {
+ 	test_suite1();
++	if (test_rb_find_nth_crlf()) {
++		return 1;
++	}
+ 	return 0;
+ }

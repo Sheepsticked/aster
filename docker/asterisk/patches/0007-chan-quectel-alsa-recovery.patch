@@ -1,0 +1,276 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 00:00:00 +0000
+Subject: [PATCH] alsa: fail the connect when the sound card cannot be set up,
+ reopen it when the playback stream never runs
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: on Linux 6.18 the kernel's snd_usb_audio in its default
+         low-latency mode never gets an EC25's USB playback stream
+         running: every write ends in XRUN, the stream is prepared and
+         restarted 50 times a second, and not one packet reaches the
+         modem, so the far end hears nothing while `quectel show devices`
+         says Free (applies on top of 0006). The host-side cure is the
+         module option lowlatency=0 (Aster's installer writes it); this
+         patch makes the driver notice and recover instead of running a
+         call without audio, and stops it from accepting a stream whose
+         setup failed at all.
+
+alsa_card_init() fails — closes the handle and returns NULL — when
+snd_pcm_hw_params(), snd_pcm_sw_params() or the poll descriptor lookup
+fails, instead of logging and going on with a stream stuck in SETUP,
+where every write answers -EBADFD ("Error -77 on write") and every call
+ends at answer. soundcard_init() closes the capture stream when the
+playback one cannot be opened, so the card is not left half open for
+the retry; the connect then fails as it always did for a missing card,
+and the monitor tries again at the next discovery round. New
+soundcard_reopen() closes and opens both streams again.
+
+activate_call() prepares the playback stream when it is neither
+prepared nor running (SETUP after a drop, not only XRUN) and logs a
+refusal once per call. channel_write() counts playback writes that end
+in XRUN one after the other (uac_xrun_streak); at 25 in a row — half a
+second of 20 ms frames — it logs a WARNING and reopens the card once
+per call, then starts the capture stream again and gives the channel
+its new descriptor. The per-call verbose line gains
+"…, N sound card reopens".
+---
+ chan_quectel.c | 55 +++++++++++++++++++++++++++++++++++++++++++-------
+ chan_quectel.h |  4 ++++
+ channel.c      | 54 ++++++++++++++++++++++++++++++++++++++++++-------
+ 3 files changed, 99 insertions(+), 14 deletions(-)
+
+diff --git a/chan_quectel.c b/chan_quectel.c
+index 835f498..e07136b 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -144,8 +144,15 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream,struct pvt *
+ 	}
+ 
+ 	err = snd_pcm_hw_params(handle, hwparams);
+-	if (err < 0)
+-		ast_log(LOG_ERROR, "Couldn't set the new hw params: %s\n", snd_strerror(err));
++	if (err < 0) {
++		/* A stream whose hardware setup failed never leaves SND_PCM_STATE_SETUP: every write to it answers -EBADFD
++		 * and every call through the device has no audio, while the device looks connected. Seen with an EC25 on the
++		 * first open after the kernel's USB audio module was reloaded (EPIPE). Failing the open instead lets the
++		 * connect fail, and the monitor retries it at the next discovery round. */
++		ast_log(LOG_ERROR, "[%s] %s: couldn't set the new hw params (%s stream): %s\n", PVT_ID(pvt), dev, (stream == SND_PCM_STREAM_CAPTURE) ? "capture" : "playback", snd_strerror(err));
++		snd_pcm_close(handle);
++		return NULL;
++	}
+ 
+ 	swparams = ast_alloca(snd_pcm_sw_params_sizeof());
+ 	memset(swparams, 0, snd_pcm_sw_params_sizeof());
+@@ -170,12 +177,18 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream,struct pvt *
+ 		ast_log(LOG_ERROR, "stop threshold: %s\n", snd_strerror(err));
+ 
+ 	err = snd_pcm_sw_params(handle, swparams);
+-	if (err < 0)
+-		ast_log(LOG_ERROR, "sw_params: %s\n", snd_strerror(err));
++	if (err < 0) {
++		ast_log(LOG_ERROR, "[%s] %s: sw_params: %s\n", PVT_ID(pvt), dev, snd_strerror(err));
++		snd_pcm_close(handle);
++		return NULL;
++	}
+ 
+ 	err = snd_pcm_poll_descriptors_count(handle);
+-	if (err <= 0)
+-		ast_log(LOG_ERROR, "Unable to get a poll descriptors count, error is %s\n", snd_strerror(err));
++	if (err <= 0) {
++		ast_log(LOG_ERROR, "[%s] %s: unable to get a poll descriptors count, error is %s\n", PVT_ID(pvt), dev, snd_strerror(err));
++		snd_pcm_close(handle);
++		return NULL;
++	}
+ 	if (err != 1) {
+ 		ast_debug(1, "Can't handle more than one device\n");
+ 	}
+@@ -194,6 +207,7 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream,struct pvt *
+ 
+ static int soundcard_init(struct pvt * pvt)
+ {
++	int err;
+ 
+        pvt->icard = alsa_card_init(CONF_UNIQ(pvt, alsadev), SND_PCM_STREAM_CAPTURE,pvt);
+ 	if (!pvt->icard) {
+@@ -204,16 +218,43 @@ static int soundcard_init(struct pvt * pvt)
+ 
+ 	if (!pvt->ocard) {
+ 		ast_log(LOG_ERROR, "Problem opening ALSA playback device %s \n",CONF_UNIQ(pvt, alsadev));
++		/* not half open: the capture stream would keep the card busy for the retry */
++		snd_pcm_close(pvt->icard);
++		pvt->icard = NULL;
++		pvt->audio_fd = -1;
+ 		return -1;
+ 	}
+ 	ast_verb (2, "Sound Card %s Initialized\n", CONF_UNIQ(pvt, alsadev));
+-        snd_pcm_prepare(pvt->icard);
++	err = snd_pcm_prepare(pvt->icard);
++	if (err < 0)
++		ast_log(LOG_WARNING, "[%s] %s: the capture stream could not be prepared: %s\n", PVT_ID(pvt), CONF_UNIQ(pvt, alsadev), snd_strerror(err));
+         snd_pcm_drop(pvt->icard);
+ 	pvt->uac_readpos = 0;
+ 	pvt->uac_left = FRAME_SIZE2;
+ 
+ 	return writedev;}
+ 
++/*!
++ * \brief Close and open the sound card again, in the middle of a call: for a playback stream that the kernel's USB
++ * audio driver never gets running (channel_write() sees nothing but XRUN, the far end hears nothing). The capture
++ * stream comes back prepared and dropped as after a connect; the caller starts it and resets the channel's fd, which
++ * has changed. The pvt lock is held by the caller.
++ * \return 0 when both streams are open again, -1 when they are not (the card is then closed)
++ */
++EXPORT_DEF int soundcard_reopen(struct pvt * pvt)
++{
++	if (pvt->icard) { snd_pcm_close(pvt->icard); pvt->icard = NULL; }
++	if (pvt->ocard) { snd_pcm_close(pvt->ocard); pvt->ocard = NULL; }
++	pvt->audio_fd = -1;
++	if (soundcard_init(pvt) < 0) {
++		if (pvt->icard) { snd_pcm_close(pvt->icard); pvt->icard = NULL; }
++		if (pvt->ocard) { snd_pcm_close(pvt->ocard); pvt->ocard = NULL; }
++		pvt->audio_fd = -1;
++		return -1;
++	}
++	return 0;
++}
++
+ 
+ static int public_state_init(struct public_state * state);
+ 
+diff --git a/chan_quectel.h b/chan_quectel.h
+index 553252b..b59d9e9 100644
+--- a/chan_quectel.h
++++ b/chan_quectel.h
+@@ -28,6 +28,7 @@
+ 
+ #include <alsa/asoundlib.h>
+ #define PERIOD_FRAMES           80
++#define UAC_XRUN_STREAK_REOPEN  25	/* playback writes ending in XRUN, one after the other, before the card is reopened: 0.5 s of 20 ms frames */
+ #define DESIRED_RATE 8000
+ #define ALSA_PCM_NEW_HW_PARAMS_API
+ #define ALSA_PCM_NEW_SW_PARAMS_API
+@@ -149,6 +150,8 @@ typedef struct pvt
+ 	int			uac_left;			/*!< samples still missing from it */
+ 	unsigned int		uac_overruns;			/*!< capture XRUNs of the current call */
+ 	unsigned int		uac_underruns;			/*!< playback XRUNs of the current call */
++	unsigned int		uac_xrun_streak;		/*!< playback writes that ended in XRUN since the last one that did not */
++	unsigned int		uac_reopens;			/*!< sound card reopened during the current call (see channel_write()) */
+ 	int			audio_fd;			/*!< audio descriptor */
+ 	int			data_fd;			/*!< data descriptor */
+ 	char			* alock;			/*!< name of lockfile for audio */
+@@ -284,6 +287,7 @@ EXPORT_DECL void pvt_reload(restate_time_t when);
+ EXPORT_DECL int pvt_enabled(const struct pvt * pvt);
+ EXPORT_DECL void pvt_try_restate(struct pvt * pvt);
+ 
++EXPORT_DECL int soundcard_reopen(struct pvt * pvt);
+ EXPORT_DECL int opentty (const char* dev, char ** lockfile, int typ);
+ EXPORT_DECL void closetty(int fd, char ** lockfname);
+ EXPORT_DECL int lock_try(const char * devname, char ** lockname);
+diff --git a/channel.c b/channel.c
+index 4993483..fc5268f 100644
+--- a/channel.c
++++ b/channel.c
+@@ -316,9 +316,9 @@ static void disactivate_call(struct cpvt* cpvt)
+ 	if(cpvt->channel && CPVT_TEST_FLAG(cpvt, CALL_FLAG_ACTIVATED))
+ 	{
+                 if (strcmp(CONF_UNIQ(pvt, quec_uac),"1") == 0) {
+-			snd_pcm_drop(pvt->icard);
++			if (pvt->icard) snd_pcm_drop(pvt->icard);
+ 			/* the only trace of a starved or overflowing sound card: upstream logs an XRUN only in a DEBUG build */
+-			ast_verb (3, "[%s] UAC audio of this call: %u capture overruns, %u playback underruns\n", PVT_ID(pvt), pvt->uac_overruns, pvt->uac_underruns);
++			ast_verb (3, "[%s] UAC audio of this call: %u capture overruns, %u playback underruns, %u sound card reopens\n", PVT_ID(pvt), pvt->uac_overruns, pvt->uac_underruns, pvt->uac_reopens);
+ 		}
+ 		else mixb_detach(&cpvt->pvt->a_write_mixb, &cpvt->mixstream);
+ 		ast_channel_set_fd (cpvt->channel, 1, -1);
+@@ -375,13 +375,24 @@ static void activate_call(struct cpvt* cpvt)
+                 snd_pcm_prepare(pvt->icard);
+                 snd_pcm_start(pvt->icard);
+                                                                                             }
+-	        if (pvt->ocard && snd_pcm_state(pvt->ocard) == SND_PCM_STATE_XRUN)
+-			snd_pcm_prepare(pvt->ocard);	/* channel_write() did this at its first frame; done here it is not counted as an underrun */
++	        if (pvt->ocard) {
++			/* XRUN: channel_write() did this at its first frame; done here it is not counted as an underrun.
++			 * Anything else but prepared or running (SETUP after a drop or a failed setup) would answer every write
++			 * with -EBADFD, so it is prepared too, and a refusal is said once per call instead of per frame. */
++			state = snd_pcm_state(pvt->ocard);
++			if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
++				int err = snd_pcm_prepare(pvt->ocard);
++				if (err < 0)
++					ast_log(LOG_ERROR, "[%s] the playback stream could not be prepared (state %d): %s\n", PVT_ID(pvt), (int) state, snd_strerror(err));
++			}
++		}
+ 	        pvt->uac_readpos = 0;
+ 	        pvt->uac_left = FRAME_SIZE2;
+ 	        pvt->uac_overruns = 0;
+ 	        pvt->uac_underruns = 0;
+-                      }                
++	        pvt->uac_xrun_streak = 0;
++	        pvt->uac_reopens = 0;
++                      }
+ //		rb_init (&cpvt->a_write_rb, cpvt->a_write_buf, sizeof (cpvt->a_write_buf));
+ //		cpvt->write = pvt->a_write_rb.write;
+ //		cpvt->used = pvt->a_write_rb.used;
+@@ -1171,16 +1182,42 @@ e_return:
+ 			if (ast_frame_adjust_volume (&g, CONF_SHARED(pvt, txgain)) == -1)
+ 				ast_debug (1, "[%s] Volume could not be adjusted!\n", PVT_ID(pvt));
+ 		}
++		/* A playback stream the kernel's USB audio driver never gets running: every write ends in XRUN, the stream is
++		 * prepared and restarted, and the next write ends in XRUN again, at 50 frames a second and without one packet
++		 * reaching the modem — the far end hears nothing while the device looks fine (seen with an EC25 on Linux
++		 * 6.18's snd_usb_audio in its low-latency mode). Closing and reopening the card once gives the driver a fresh
++		 * stream, which is what a `quectel restart` did by hand; the count goes to the per-call line either way. */
++		if (pvt->uac_xrun_streak >= UAC_XRUN_STREAK_REOPEN && pvt->uac_reopens == 0) {
++			pvt->uac_reopens++;
++			ast_log(LOG_WARNING, "[%s] the playback stream does not run (%u writes in a row ended in XRUN, nothing reaches the modem): reopening the sound card\n", PVT_ID(pvt), pvt->uac_xrun_streak);
++			pvt->uac_xrun_streak = 0;
++			if (soundcard_reopen(pvt) == 0) {
++				snd_pcm_prepare(pvt->icard);
++				snd_pcm_start(pvt->icard);
++				pvt->uac_readpos = 0;
++				pvt->uac_left = FRAME_SIZE2;
++				if (cpvt->channel)
++					ast_channel_set_fd (cpvt->channel, 0, pvt->audio_fd);	/* the capture fd is a new one */
++			} else {
++				ast_log(LOG_ERROR, "[%s] the sound card could not be reopened; this call has no audio\n", PVT_ID(pvt));
++			}
++		}
++		if (!pvt->ocard) {
++			res = -ENODEV;
++		} else {
+ 		state = snd_pcm_state(pvt->ocard);
+ 		if (state == SND_PCM_STATE_XRUN) {
+ 			pvt->uac_underruns++;
+ 			snd_pcm_prepare(pvt->ocard);
++		} else if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
++			snd_pcm_prepare(pvt->ocard);	/* SETUP would answer -EBADFD; see activate_call() */
+ 		}
+ 		while ((res = snd_pcm_writei(pvt->ocard, sizbuf, len / 2)) == -EAGAIN) {
+ 			usleep(1);
+ 		}
+ 		if (res == -EPIPE) {
+ 			pvt->uac_underruns++;
++			pvt->uac_xrun_streak++;
+ #if DEBUG
+ 			ast_debug(1, "XRUN write\n");
+ #endif
+@@ -1196,11 +1233,14 @@ e_return:
+ 				res = -1;
+ 			}
+ 		} else {
+-			if (res == -ESTRPIPE)
++			if (res >= 0)
++				pvt->uac_xrun_streak = 0;
++			else if (res == -ESTRPIPE)
+ 				ast_log(LOG_ERROR, "You've got some big problems\n");
+-			else if (res < 0)
++			else
+ 				ast_log(LOG_NOTICE, "Error %d on write\n", res);
+ 		}
++		}
+ 	}
+ 
+ 	ast_mutex_unlock (&pvt->lock);

@@ -1,0 +1,79 @@
+# Aster — the appliance: what install.sh installs and `aster` runs (`docker compose up -d` here, with the .env beside
+# this file, is `aster start`). Paths are relative to this file; docker/compose.dev.yml extends it for development.
+name: aster
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  asterisk:
+    image: ${ASTER_IMAGE_NS:-sheepsticked}/aster-asterisk:${ASTER_VERSION:-latest}
+    build:
+      context: ${ASTER_REPO:-.}/docker/asterisk   # versions are pinned in the Dockerfile
+      target: aster
+    container_name: aster-asterisk
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ${ASTER_HOME:-./data}/config/asterisk:/etc/asterisk
+      - ${ASTER_HOME:-./data}/state/asterisk:/var/lib/asterisk
+      - ${ASTER_HOME:-./data}/spool:/var/spool/aster
+      - ${ASTER_HOME:-./data}/logs/asterisk:/var/log/asterisk
+      - /dev:/dev
+    tmpfs:            # scratch files in RAM, not on the SD card
+      - /tmp
+      - /run/lock
+    # Rare checks: each one is a `docker exec`, which writes a temporary file on the host.
+    healthcheck:
+      test: ["CMD", "asterisk", "-rx", "core show uptime"]
+      interval: 5m
+      timeout: 10s
+      start_period: 2m
+      start_interval: 5s
+      retries: 3
+    logging: *logging
+
+  controller:
+    image: ${ASTER_IMAGE_NS:-sheepsticked}/aster-controller:${ASTER_VERSION:-latest}
+    build:
+      context: ${ASTER_REPO:-.}
+      dockerfile: docker/controller/Dockerfile
+    container_name: aster-controller
+    network_mode: host
+    # The host's current name, which starts every Telegram text (read-only here: no CAP_SYS_ADMIN).
+    uts: host
+    restart: unless-stopped
+    depends_on:
+      asterisk:
+        condition: service_healthy
+    environment:
+      ASTER_HOME: /srv/aster
+      ASTER_HTTP_PORT: ${ASTER_HTTP_PORT:-80}
+      ASTER_AMI_HOST: 127.0.0.1
+      ASTER_AMI_PORT: "5038"
+      NODE_ENV: production
+    # No env_file: the controller reads and rewrites config/secrets.env itself; as an env_file the secrets would show
+    # in `docker inspect` and compose would mangle the `$` in the password hash.
+    # Five home directories, not the whole home (its .env is not the controller's). A service that extends this one must
+    # use the same five targets: compose merges volumes by target.
+    volumes:
+      - ${ASTER_HOME:-./data}/config:/srv/aster/config
+      - ${ASTER_HOME:-./data}/state:/srv/aster/state
+      - ${ASTER_HOME:-./data}/spool:/srv/aster/spool
+      - ${ASTER_HOME:-./data}/logs:/srv/aster/logs
+      - ${ASTER_HOME:-./data}/backups:/srv/aster/backups
+      - /sys:/sys:ro
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.ASTER_HTTP_PORT||80)+'/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5m
+      timeout: 10s
+      start_period: 2m
+      start_interval: 5s
+      retries: 3
+    logging: *logging

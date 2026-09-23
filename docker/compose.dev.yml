@@ -1,0 +1,44 @@
+# Aster — development compose: builds both images from this checkout and runs them against a local .dev/srv tree.
+# Usage, from the repository root: create .dev/srv first (README.md, "Run the stack from the checkout"), then:
+#   docker compose -f docker/compose.dev.yml up --build
+# Never used in production: the appliance's own file is docker-compose.yml at the root, which this one extends. Every
+# path below is relative to this file's directory, which is the project directory compose takes from `-f`.
+name: aster-dev
+
+services:
+  asterisk:
+    extends:
+      file: ../docker-compose.yml
+      service: asterisk
+    # A name of its own: the production service is the published sheepsticked/aster-asterisk:latest, and a build here
+    # would otherwise overwrite the image an appliance on this host pulled.
+    image: aster/aster-asterisk:dev
+    build:
+      context: ./asterisk
+    volumes:
+      - ../.dev/srv/config/asterisk:/etc/asterisk
+      - ../.dev/srv/state/asterisk:/var/lib/asterisk
+      - ../.dev/srv/spool:/var/spool/aster
+      - ../.dev/srv/logs/asterisk:/var/log/asterisk
+      - /dev:/dev
+
+  controller:
+    extends:
+      file: ../docker-compose.yml
+      service: controller
+    image: aster/aster-controller:dev
+    build:
+      context: ..
+      dockerfile: docker/controller/Dockerfile
+    environment:
+      ASTER_HTTP_PORT: "80"
+      NODE_ENV: development
+    # The same five targets as the production service (see the comment there): a single ./.dev/srv:/srv/aster would
+    # leave the production file's ../data/* host paths mounted on top of it.
+    volumes:
+      - ../.dev/srv/config:/srv/aster/config
+      - ../.dev/srv/state:/srv/aster/state
+      - ../.dev/srv/spool:/srv/aster/spool
+      - ../.dev/srv/logs:/srv/aster/logs
+      - ../.dev/srv/backups:/srv/aster/backups
+      - /sys:/sys:ro

@@ -1,0 +1,87 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 42
+LastReload: 42
+Status: Fully Booted
+
+Response: Success
+ActionID: at-1
+Message: [gsm1] AT command queued
+
+Event: QuectelAtResponse
+Privilege: system,all
+ActionID: at-1
+Device: gsm1
+Line: +CCFC: 1,1,"+1234567890",145
+
+Event: QuectelAtResponse
+Privilege: system,all
+ActionID: at-1
+Device: gsm1
+Line: +CCFC: 0,2
+
+Event: QuectelAtDone
+Privilege: system,all
+ActionID: at-1
+Device: gsm1
+Result: OK
+
+Event: QuectelAtDone
+Privilege: system,all
+ActionID: at-0
+Device: gsm1
+Result: TIMEOUT
+Error: timeout
+
+Response: Success
+ActionID: at-2
+Message: [gsm1] AT command queued
+
+Event: QuectelAtResponse
+Privilege: system,all
+ActionID: at-2
+Device: gsm1
+Line: +CMGR: 1,,24\r\n07919730071111F1040B919730071111F10000629090315000210548656C6C6F
+
+Event: QuectelNewCMGR
+Privilege: call,all
+Device: gsm1
+Message: +CMGR: 1,,24\r\n07919730071111F1040B919730071111F10000629090315000210548656C6C6F
+
+Event: QuectelAtDone
+Privilege: system,all
+ActionID: at-2
+Device: gsm1
+Result: ERROR
+Error: task removed
+
+Response: Success
+ActionID: at-3
+Message: [gsm1] AT command queued
+
+Event: QuectelAtDone
+Privilege: system,all
+ActionID: at-3
+Device: gsm1
+Result: ERROR
+Error: queue flushed
+
+Event: QuectelStatus
+Privilege: call,all
+Device: gsm1
+Status: Free
+
+Event: QuectelStatus
+Privilege: call,all
+Device: gsm1
+Status: Disconnect
+
+Response: Goodbye
+ActionID: ami-2
+Message: Thanks for all the fish.
+

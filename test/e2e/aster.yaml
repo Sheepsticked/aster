@@ -1,0 +1,45 @@
+# Aster — the registry of the end-to-end run: docker/asterisk/test-registry.yaml with somebody to notify.
+# The modems and phones are exactly those of test-registry.yaml, so the generated half the stack starts with
+# (docker/asterisk/test-config/aster.d, copied into the appliance home by test/e2e/run.sh) is this file's own generator
+# output. What test-registry.yaml has no use for and the flows do is a Telegram recipient: a missed call and an
+# incoming SMS produce one notification per recipient, and the fake Bot API of the overlay is where it lands.
+version: 1
+settings:
+  ui_language: ru
+  timezone: UTC
+telegram:
+  default_recipients: ["100200300"]
+  alerts: false
+modems:
+  - id: gsm_test             # the smoke-test device: dialplan → aster-emit cases, QuectelAtCommand cases; rings phone 599
+    driver: quectel
+    imei: "000000000000000"
+    enabled: false
+    ring: ["599"]
+    group: 1
+  - id: gsm_dongle           # the chan_dongle device of the DongleAtCommand cases
+    driver: dongle
+    imei: "000000000000001"
+    enabled: false
+    group: 1
+  - id: gsm_uac              # quec_uac + alsadev from usb_port; custom incoming context, so no aster-ring-gsm_uac
+    driver: quectel
+    imei: "000000000000002"
+    enabled: false
+    uac: true
+    usb_port: "1-1.3"
+    incoming_context: smoke-in
+  - id: gsm_unmapped         # enabled, but uac without usb_port: initstate stop, no quec_uac; ring [] hangs up at once
+    driver: quectel
+    imei: "000000000000003"
+    enabled: true
+    uac: true
+  - id: gsm_ports            # ports escape hatch: data/audio instead of imei; group null writes no group line
+    driver: dongle
+    imei: "000000000000004"
+    enabled: false
+    ports: { data: /dev/ttyUSB9, audio: /dev/ttyUSB8 }
+phones:
+  - { number: "599", secret: "599", outbound: gsm_test }
+  - { number: "598", secret: ">598", outbound: null, direct_media: true }   # a secret starting with ">" (password= >598)
+  - { number: "597", secret: "597", outbound: gsm_ports, context: smoke-in }

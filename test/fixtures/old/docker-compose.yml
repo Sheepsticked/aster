@@ -1,0 +1,49 @@
+---
+services:
+  asterisk:
+    image: sheepsticked/asterisk-dongle-quectel-rpi:latest
+    container_name: asterisk
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./asterisk:/etc/asterisk
+      - /dev:/dev
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+  asterisk-webui:
+    image: asterisk-webui
+    container_name: asterisk-webui
+    build:
+      context: ./asterisk-webui
+      dockerfile: ./asterisk-webui/Dockerfile
+    depends_on:
+      - asterisk
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./asterisk:/etc/asterisk
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /srv/asterisk/temp:/temp
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+  smtp-py-telegram:
+    image: smtp-py-telegram
+    container_name: smtp-py-telegram
+    build:
+      context: ./smtp-py-telegram
+      dockerfile: ./smtp-py-telegram/Dockerfile
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - SMTPPYTG_BIND_ADDRESS=127.0.0.1
+      - SMTPPYTG_BOT_TOKEN=<REDACTED-BOT-TOKEN>
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"

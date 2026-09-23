@@ -1,0 +1,23 @@
+Asterisk Call Manager/9.0.0
+Response: Success
+ActionID: ami-1
+Message: Authentication accepted
+
+Event: FullyBooted
+Privilege: system,all
+Uptime: 240
+LastReload: 0
+Status: Fully Booted
+
+Response: Error
+ActionID: at-1
+Message: Device not connected
+
+Response: Error
+ActionID: at-2
+Message: Invalid Timeout
+
+Response: Goodbye
+ActionID: ami-2
+Message: Thanks for all the fish.
+

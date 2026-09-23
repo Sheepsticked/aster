@@ -1,0 +1,10 @@
+# valid: only the required keys; every other key takes its default
+version: 1
+modems:
+  - id: gsm1
+    driver: dongle
+    imei: "490154203237542"
+    enabled: true
+phones:
+  - number: "501"
+    secret: "501"

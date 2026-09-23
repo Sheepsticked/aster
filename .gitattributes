@@ -1,0 +1,7 @@
+# AMI transcripts are byte-exact server captures with CRLF line ends (packages/controller/test/fixtures/ami/README.md):
+# git must never convert them.
+packages/controller/test/fixtures/ami/*.txt -text
+# Spool fixtures are aster-emit output byte for byte, and malformed/crlf.evt must keep its CR (fixtures/spool/README.md).
+packages/controller/test/fixtures/spool/**/*.evt -text
+# Discovery command captures keep their line ends (one synthesized file mixes LF and CRLF blocks on purpose, fixtures/discovery/README.md).
+packages/controller/test/fixtures/discovery/*.txt -text

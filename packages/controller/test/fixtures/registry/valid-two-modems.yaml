@@ -1,0 +1,43 @@
+version: 1
+settings:
+  ui_language: ru              # ru | en
+  timezone: Europe/Istanbul       # display only
+  retention_days: { operations: 90, notifications: 90 }
+telegram:
+  default_recipients: ["111222333"]   # chat ids; token lives in secrets.env
+  alerts: false                       # modem down >5 min / Asterisk unreachable >2 min
+modems:
+  - id: gsm1                   # ^[a-z][a-z0-9_]{0,15}$ = driver device name = ${GSM1}
+    driver: quectel            # quectel | dongle
+    imei: "490154203237534"    # 15 digits, unique
+    enabled: true              # → radio=on | off (a disabled modem stays started with its radio off)
+    uac: true                  # quectel only → quec_uac=1 + alsadev from usb_port
+    usb_port: "1-1.3"          # auto-filled by Scan/remap; required to start when uac=true
+    ring: ["504","505","506","507","508"]   # generated ring group; ring_timeout: 120
+    incoming_context: null     # null = generated aster-ring-gsm1; or a custom context name
+    group: 1
+    recipients: null           # null = telegram.default_recipients
+  - id: gsm2
+    driver: dongle
+    imei: "490154203237542"
+    enabled: true
+    ring: ["511","512","513","514","515"]
+    group: 2
+    # ports: { data: /dev/serial/by-path/..., audio: ... }   # escape hatch for undiscoverable PIDs
+phones:                        # every ring member must be listed here
+  - { number: "501", secret: "501", outbound: null }        # null = internal only
+  - { number: "502", secret: "502", outbound: null }
+  - { number: "503", secret: "503", outbound: null }
+  - { number: "504", secret: "504", outbound: gsm1 }
+  - { number: "505", secret: "505", outbound: gsm1 }
+  - { number: "506", secret: "506", outbound: gsm1 }
+  - { number: "507", secret: "507", outbound: gsm1 }
+  - { number: "508", secret: "508", outbound: gsm1 }
+  - { number: "509", secret: "509", outbound: null, direct_media: true }
+  - { number: "510", secret: "510", outbound: null, direct_media: true }
+  - { number: "511", secret: "511", outbound: gsm2 }
+  - { number: "512", secret: "512", outbound: gsm2 }
+  - { number: "513", secret: "513", outbound: gsm2 }
+  - { number: "514", secret: "514", outbound: gsm2 }
+  - { number: "515", secret: "515", outbound: gsm2 }
+  # optional per phone: label, context (override), direct_media (default false)

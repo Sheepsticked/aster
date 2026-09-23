@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Mon, 21 Sep 2026 00:00:00 +0000
+Subject: [PATCH] user-command deadline: do not time out a command written
+ during an idle wait
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: an AtCommand is written by the AMI thread while the monitor thread
+         already waits with its 10 s idle timeout, so the command timed out
+         when that wait ended (after 0 to 10 s) and the modem was restarted,
+         whatever Timeout it was given; an EC25 on LTE needs about 18 s for
+         AT+CCFC (applies on top of 0008)
+
+When the wait ends, a head command that was written and whose own deadline
+is still ahead is waited for again instead of being reported as timed out.
+---
+ chan_quectel.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/chan_quectel.c b/chan_quectel.c
+index 07b7719..d30ef8c 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -712,6 +712,12 @@ static void* do_monitor_phone (void* data)
+ 		{
+ 			ast_mutex_lock (&pvt->lock);
+ 			ecmd = at_queue_head_cmd (pvt);
++			/* a command another thread wrote during this wait has a deadline of its own */
++			if(ecmd && ecmd->length == 0 && ast_tvdiff_ms (ecmd->timeout, ast_tvnow()) > 0)
++			{
++				ast_mutex_unlock (&pvt->lock);
++				continue;
++			}
+ 			if(ecmd)
+ 			{
+ 				ast_log (LOG_ERROR, "[%s] timedout while waiting '%s' in response to '%s'\n", dev, at_res2str (ecmd->res), at_cmd2str (ecmd->cmd));

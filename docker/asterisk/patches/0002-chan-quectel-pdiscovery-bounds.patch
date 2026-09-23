@@ -1,0 +1,107 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Date: Sat, 13 Sep 2026 00:00:00 +0000
+Subject: [PATCH] pdiscovery: bound IMEI/IMSI parsing so a noisy port cannot
+ crash Asterisk
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: fix an intermittent SIGSEGV during `quectel discovery` when a non-Quectel
+         modem (e.g. a Huawei E173) is present
+
+pdiscovery probes every free ttyUSB, including a non-Quectel modem's, and parses
+the reply for an IMEI/IMSI. pdiscovery_handle_ati()/pdiscovery_handle_cimi() did
+
+    char imei2[15];
+    sscanf(str, "AT+GSN %s OK", &imei2);
+
+The %s conversion has no field width, so any reply whose first non-whitespace
+token is longer than 14 characters overflows the 15-byte stack buffer. A Huawei
+E173 in its SIM-less reconnect loop emits an unsolicited "^BOOT:31234560,0,0,0,20"
+(23 non-whitespace bytes); when that lands in a probe read that also contains
+"OK"/"ERROR", the sscanf writes 9 bytes past imei2. The module is compiled at -O6
+with no stack protector, so the smash is silent and Asterisk crashes later in the
+pdiscovery call chain (observed: SIGSEGV at chan_quectel.so .text+0x1CE44, a
+frame-relative load in pdiscovery_get_info()). The crash is a race -- it needs the
+unsolicited line to coincide with a probe read -- which is why it is intermittent.
+The buffer was also one byte too small for a valid 15-digit IMEI plus its NUL.
+
+Fix: size the buffers to IMEI_SIZE+1/IMSI_SIZE+1 and bind the conversion to a
+digits-only field of exactly IMEI_SIZE/IMSI_SIZE characters (%<n>[0-9]), then
+require the parsed value to be that many digits. An over-long or non-numeric token
+(a "^BOOT:" line, or the "AT+GSN;" command echo that produced the long-standing
+imei=;/imsi=<echo> garbage) is now rejected instead of overflowing the stack or
+being returned as a bogus identity.
+---
+diff --git a/pdiscovery.c b/pdiscovery.c
+index dff16bd..f2ec82b 100644
+--- a/pdiscovery.c
++++ b/pdiscovery.c
+@@ -17,6 +17,16 @@
+ #include "chan_quectel.h"		/* opentty() closetty() */
+ #include "manager.h"			/* manager_event_message_raw() */
+ 
++/* Bounded IMEI/IMSI scanning for pdiscovery_handle_ati()/_cimi(). The field width is one digit
++ * MORE than the identifier, so that a longer run of digits comes back too long and is rejected
++ * instead of being silently truncated to a valid-looking identifier. The buffers add room for
++ * the terminating NUL. The typedef is a compile-time check that the widths track the sizes. */
++#define PDISC_STR_(x)	#x
++#define PDISC_STR(x)	PDISC_STR_(x)
++#define PDISC_IMEI_W	16
++#define PDISC_IMSI_W	16
++typedef char pdisc_width_check[(PDISC_IMEI_W == IMEI_SIZE + 1 && PDISC_IMSI_W == IMSI_SIZE + 1) ? 1 : -1];
++
+ /*
+ static const char sys_bus_usb_drivers_usb[] = "/sys/bus/usb/drivers/usb";
+ */
+@@ -423,17 +433,16 @@ static const struct pdiscovery_device * pdiscovery_lookup_ids(const char * devna
+ #/* 0D 0A IMEI: <15 digits> 0D 0A */
+ static char * pdiscovery_handle_ati(const char * devname, char * str)
+ {
+-	char * imei = NULL;
+-        char imei2[15];
++	char imei[PDISC_IMEI_W + 1];
+ 
+-        if (sscanf (str, "AT+GSN %s OK", &imei2) == 1) {
+-        imei = ast_strdup(imei2);
+-        return imei;
+-        }
+-        if (sscanf (str, " %s OK", &imei2) == 1) {
+-        imei = ast_strdup(imei2);
+-        return imei;
+-        }
++	/* An IMEI is exactly IMEI_SIZE decimal digits. Bind the conversion to a digits-only field
++	 * so an over-long or non-numeric token -- e.g. a Huawei "^BOOT:" unsolicited line that
++	 * lands in this probe read -- can neither overflow the stack buffer (this module is built
++	 * without a stack protector) nor be returned as a bogus IMEI. */
++	if ((sscanf(str, "AT+GSN %" PDISC_STR(PDISC_IMEI_W) "[0-9] OK", imei) == 1 ||
++	     sscanf(str, " %" PDISC_STR(PDISC_IMEI_W) "[0-9] OK", imei) == 1) &&
++	    strlen(imei) == IMEI_SIZE)
++		return ast_strdup(imei);
+ 
+ 	return NULL;
+ }
+@@ -441,17 +450,13 @@ static char * pdiscovery_handle_ati(const char * devname, char * str)
+ #/* 0D 0A 15 digits 0D 0A */
+ static char * pdiscovery_handle_cimi(const char * devname, char * str)
+ {
+-	char * imsi = NULL;
+-        char imsi2[15];
+-
+-        if (sscanf (str, "AT+CIMI %s OK", &imsi2) == 1) {
+-        imsi = ast_strdup(imsi2);
+-        return imsi;
+-        }
+-        if (sscanf (str, " %s OK", &imsi2) == 1) {
+-        imsi = ast_strdup(imsi2);
+-        return imsi;
+-        }
++	char imsi[PDISC_IMSI_W + 1];
++
++	/* Same bound as pdiscovery_handle_ati(): an IMSI is IMSI_SIZE decimal digits. */
++	if ((sscanf(str, "AT+CIMI %" PDISC_STR(PDISC_IMSI_W) "[0-9] OK", imsi) == 1 ||
++	     sscanf(str, " %" PDISC_STR(PDISC_IMSI_W) "[0-9] OK", imsi) == 1) &&
++	    strlen(imsi) == IMSI_SIZE)
++		return ast_strdup(imsi);
+ 
+ 	return NULL;
+ }
