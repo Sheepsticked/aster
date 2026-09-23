@@ -73,13 +73,21 @@ jobs:
           test "$(docker logs aster-asterisk 2>&1 | grep -c '  ==' || true)" -eq 0
           sudo test "$(sudo grep -c 'VERBOSE' "$HOME_DIR/logs/asterisk/full")" -gt 0
 
-      - name: everything is root's, and the controller sees only its five directories
+      - name: the home is root's except what Asterisk writes, Asterisk is unprivileged, the controller sees five directories
         run: |
           set -euo pipefail
-          # Both containers run as root; the controller mounts only five home directories, so it cannot rewrite
-          # the checkout or .env that root runs on `aster update`.
-          not_root=$(sudo find "$HOME_DIR" \( ! -uid 0 -o ! -gid 0 \) -printf '%u:%g %P\n')
+          # The controller runs as root but mounts only five home directories, so it cannot rewrite the checkout or
+          # .env that root runs on `aster update`. Asterisk runs as uid 5060 and owns only the directories it writes.
+          not_root=$(sudo find "$HOME_DIR" -path "$HOME_DIR/state/asterisk" -prune -o -path "$HOME_DIR/logs/asterisk" -prune \
+            -o -path "$HOME_DIR/spool/events" -prune -o -path "$HOME_DIR/config/asterisk/manager.conf" -prune \
+            -o \( ! -uid 0 -o ! -gid 0 \) -printf '%u:%g %P\n')
           test -z "$not_root" || { echo "not root's:"; echo "$not_root"; exit 1; }
+          not_asterisk=$(sudo find "$HOME_DIR"/{state/asterisk,logs/asterisk,spool/events} \( ! -uid 5060 -o ! -gid 5060 \) \
+            -printf '%u:%g %P\n')
+          test -z "$not_asterisk" || { echo "not Asterisk's:"; echo "$not_asterisk"; exit 1; }
+          test "$(sudo stat -c '%u:%g %a' "$HOME_DIR/config/asterisk/manager.conf")" = '0:5060 640'
+          test "$(docker inspect -f '{{.HostConfig.Privileged}}' aster-asterisk)" = false
+          test "$(docker exec aster-asterisk awk '/^Uid:/ { print $2 }' /proc/1/status)" = 5060
           test "$(docker exec aster-controller id -u)" = 0
           seen=$(docker exec aster-controller ls -A /srv/aster | sort | tr '\n' ' ')
           test "$seen" = 'backups config logs spool state ' || { echo "the controller sees: $seen"; exit 1; }

@@ -3,17 +3,20 @@
 # secret, whoever owns them when the container starts, then starts Asterisk, which drops to that user.
 set -eu
 
+# An empty spool mount gets events/ here, since Asterisk's user cannot create it in a spool that is root's.
+mkdir -p /var/spool/aster/events
+
 # Only paths with another owner are changed, so an ordinary start writes nothing.
 for dir in /var/lib/asterisk /var/log/asterisk /var/spool/aster/events; do
-  if [ -d "$dir" ]; then
-    find "$dir" \( ! -user asterisk -o ! -group asterisk \) -exec chown -h asterisk:asterisk {} +
-  fi
+  find "$dir" \( ! -user asterisk -o ! -group asterisk \) -exec chown -h asterisk:asterisk {} +
 done
 
+# An older installer wrote it root-only. It is changed only when Asterisk's user cannot read it, so a read-only
+# /etc/asterisk with a readable file starts as it is.
 conf=/etc/asterisk/manager.conf
-if [ -f "$conf" ] && [ "$(stat -c '%U:%G %a' "$conf")" != 'root:asterisk 640' ]; then
-  chown root:asterisk "$conf"
-  chmod 640 "$conf"
+if [ -f "$conf" ] && ! setpriv --reuid=asterisk --regid=asterisk --init-groups test -r "$conf"; then
+  { chown root:asterisk "$conf" && chmod 640 "$conf"; } ||
+    echo "aster-start: the asterisk user cannot read $conf, so AMI has no users" >&2
 fi
 
 # `-U` without `-G`: with a group given, Asterisk drops the supplementary groups and loses the modems' devices.

@@ -53,12 +53,15 @@ case $cmd in
     if [ -e "$HOME_DIR" ] && [ ! -f "$HOME_DIR/.aster-hw" ]; then die "$HOME_DIR exists and was not made by this script"; fi
     rm -rf "$HOME_DIR"
     mkdir -p "$HOME_DIR"/{config/asterisk/aster.d,state/asterisk,state/prev,spool/events,logs/asterisk,backups}
+    # Asterisk writes these as its own user, and the controller, which runs as the invoking user here, deletes in them.
+    chmod 777 "$HOME_DIR"/{state/asterisk,spool/events,logs/asterisk}
     : > "$HOME_DIR/.aster-hw"
     # The production starter files (install/templates), not the test-config: this is the real thing on real modems.
     for src in "$ROOT"/install/templates/asterisk/*.conf; do cp "$src" "$HOME_DIR/config/asterisk/"; done
     ami_secret=$(head -c 24 /dev/urandom | base64 | tr -d '/+=\n')
     sed "s|@ASTER_AMI_SECRET@|$ami_secret|" "$ROOT/install/templates/asterisk/manager.conf.tmpl" > "$HOME_DIR/config/asterisk/manager.conf"
-    chmod 600 "$HOME_DIR/config/asterisk/manager.conf"
+    # Asterisk reads it as its own user; the secret is made for this stack only.
+    chmod 644 "$HOME_DIR/config/asterisk/manager.conf"
     cp "$REGISTRY" "$HOME_DIR/config/aster.yaml"
     ( umask 077; printf 'ASTER_AMI_SECRET=%s\nTELEGRAM_BOT_TOKEN=1234567890:hw-fake-token_of-the-bot-api-stand-in\n' "$ami_secret" > "$HOME_DIR/config/secrets.env" )
     in_controller -e ASTER_ADMIN_PASSWORD="$PASSWORD" -v "$HOME_DIR:/srv/aster" "$IMAGE_NS/aster-controller:$TAG" node packages/controller/bin/passwd.js >/dev/null

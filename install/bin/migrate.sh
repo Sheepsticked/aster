@@ -560,7 +560,7 @@ cmd_check() {
     id=$(cat "$card/id")
     case $id in quectel_*) note "sound card ${card##*/} is named $id — the old rename's name; Aster's is q_<port>" ;; esac
   done
-  if [ -f "$(host "$SOUND_RULE")" ]; then leftover "$SOUND_RULE — harmless (Asterisk runs as root), cleanup removes it"; fi
+  if [ -f "$(host "$SOUND_RULE")" ]; then leftover "$SOUND_RULE — harmless (the cards stay in group audio, which Asterisk's user is in), cleanup removes it"; fi
   if [ -f "$(host "$MM_RULE")" ]; then leftover "$MM_RULE — harmless (ModemManager kept off every ttyUSB), cleanup removes it"; fi
   local rule
   for rule in "$(host /etc/udev/rules.d)"/*.rules; do

@@ -2,7 +2,7 @@
 # Aster — container smoke test for the Asterisk image.
 #
 # Boots <image> with docker/asterisk/test-config mounted read-only and empty tmpfs for state, spool and logs (like the
-# empty bind mounts of a fresh install), then checks: the pinned version, the modules, AMI
+# empty bind mounts of a fresh install), then checks: the pinned version, the user Asterisk runs as, the modules, AMI
 # login, the configuration the controller generated into test-config/aster.d from docker/asterisk/test-registry.yaml
 # (dialplan contexts, PJSIP endpoints, the device sections of both drivers with their UAC, unmapped
 # and ports variants), music on hold, aster-emit's validation and atomic write, the dialplan -> aster-emit path for all
@@ -96,6 +96,10 @@ pass "fully booted after $(($(date +%s) - start))s"
 check_match "Asterisk version is the pinned one ($version)" "$(cli 'core show version')" \
   "^Asterisk $(printf '%s' "$version" | sed 's/\./\\./g') "
 check_match "healthcheck command answers" "$(cli 'core show uptime')" '^System uptime: '
+# The entrypoint execs Asterisk, which drops to its own user for good and keeps dialout and audio for the modems.
+check_match "Asterisk runs as the asterisk user, in dialout and audio" "$(x cat /proc/1/status)" \
+  '^Uid:[[:space:]]+5060[[:space:]]+5060[[:space:]]+5060[[:space:]]+5060$' \
+  '^Groups:(.*[[:space:]])?20([[:space:]]|$)' '^Groups:(.*[[:space:]])?29([[:space:]]|$)'
 modules=$(cli 'module show')
 check_match "channel drivers Running: chan_pjsip, chan_quectel, chan_dongle" "$modules" \
   '^chan_pjsip\.so .* Running ' '^chan_quectel\.so .* Running ' '^chan_dongle\.so .* Running '
@@ -306,11 +310,8 @@ nfields() { printf '%s\n' "$line" | awk -F "$tab" '{ print NF }'; }
 b64x() { printf 'x%s' "$1" | base64 | tr -d '\n'; }      # expected value, encoded on the host
 unb64() { x sh -c 'printf %s "$1" | base64 -d' sh "$1"; } # decoded inside the container
 
-if x test -e "$spool"; then
-  fail "the spool already has events/ before the first event"
-else
-  pass "the spool starts without events/ (like a fresh bind mount)"
-fi
+check_eq "the entrypoint made events/ in the empty spool: the asterisk user's, mode 755, empty" \
+  "$(x stat -c '%U:%G %a' "$spool") $(x sh -c 'ls -A "$1" | wc -l' sh "$spool")" 'asterisk:asterisk 755 0'
 
 hostile='`id`;$(id)'
 if originate call; then
@@ -326,7 +327,6 @@ if originate call; then
   done
   check_eq "call-end: every field is base64 with the x sentinel" "$sentinel" ok
   info "call-end: ANSWEREDTIME=$(unb64 "$(field 10)") disposition=$(unb64 "$(field 11)") HANGUPCAUSE=$(unb64 "$(field 12)") DIALEDTIME=$(unb64 "$(field 13)") (x = sentinel)"
-  check_eq "aster-emit created events/ with mode 755" "$(x stat -c %a "$spool")" 755
 fi
 if originate did; then
   check_eq "call-end (DID): caller" "$(unb64 "$(field 7)")" x+375290000001
