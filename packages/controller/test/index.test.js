@@ -63,7 +63,7 @@ test('--check on an empty ASTER_HOME creates state/aster.db, prints every table 
   assert.deepEqual(first.stdout.split('\n').filter((line) => line !== '' && !line.startsWith('{')), TABLES);
   const [migrated] = logLines(first.stdout);
   assert.equal(migrated?.msg, 'migrations applied');
-  assert.deepEqual([migrated?.from, migrated?.to, migrated?.applied], [0, 2, [1, 2]]);
+  assert.deepEqual([migrated?.from, migrated?.to, migrated?.applied], [0, 3, [1, 2, 3]]);
 
   const second = runSync(home, ['--check']);
   assert.equal(second.status, 0, second.stdout + second.stderr);

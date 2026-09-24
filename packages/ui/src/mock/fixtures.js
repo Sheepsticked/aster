@@ -146,11 +146,15 @@ export const messages = () => [
 
 /** Calls as `GET /api/calls` returns them: the three outcomes the controller derives. */
 export const calls = () => [
-  { id: 7, modem_id: 'gsm1', uniqueid: '1789200000.7', caller: '+1234567890', did: '+375291111111', dialstatus: 'ANSWER',
+  { id: 9, modem_id: 'gsm1', uniqueid: '1789200000.9', direction: 'out', caller: '504', did: '+1234567891', dialstatus: 'ANSWER',
+    answered_sec: 312, dialed_sec: 320, disposition: 'ANSWERED', hangupcause: 16, outcome: 'answered', ended_at: Date.now() - 5 * MINUTE },
+  { id: 8, modem_id: 'gsm2', uniqueid: '1789200000.8', direction: 'out', caller: '511', did: '+1234567892', dialstatus: 'BUSY',
+    answered_sec: 0, dialed_sec: 4, disposition: 'BUSY', hangupcause: 17, outcome: 'unanswered', ended_at: Date.now() - 30 * MINUTE },
+  { id: 7, modem_id: 'gsm1', uniqueid: '1789200000.7', direction: 'in', caller: '+1234567890', did: '+375291111111', dialstatus: 'ANSWER',
     answered_sec: 96, dialed_sec: 12, disposition: 'ANSWERED', hangupcause: 16, outcome: 'answered', ended_at: Date.now() - 12 * MINUTE },
-  { id: 6, modem_id: 'gsm2', uniqueid: '1789200000.6', caller: '+375447654321', did: '+375292222222', dialstatus: 'NOANSWER',
+  { id: 6, modem_id: 'gsm2', uniqueid: '1789200000.6', direction: 'in', caller: '+375447654321', did: '+375292222222', dialstatus: 'NOANSWER',
     answered_sec: 0, dialed_sec: 25, disposition: 'NO ANSWER', hangupcause: 19, outcome: 'missed', ended_at: Date.now() - 50 * MINUTE },
-  { id: 5, modem_id: 'gsm1', uniqueid: '1789200000.5', caller: '', did: '+375291111111', dialstatus: 'CONGESTION',
+  { id: 5, modem_id: 'gsm1', uniqueid: '1789200000.5', direction: 'in', caller: '', did: '+375291111111', dialstatus: 'CONGESTION',
     answered_sec: 0, dialed_sec: 0, disposition: 'FAILED', hangupcause: 34, outcome: 'failed', ended_at: Date.now() - 5 * HOUR },
 ];
 

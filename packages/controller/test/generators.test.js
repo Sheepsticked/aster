@@ -88,13 +88,13 @@ describe('generators', () => {
       }
     });
 
-    test('an empty registry gives the headers, aster-phones-internal and aster-hangup', () => {
+    test('an empty registry gives the headers, aster-phones-internal, aster-outgoing and aster-hangup', () => {
       const files = generateAll({ version: 1, modems: [], phones: [] });
       assert.equal(files['aster.d/globals.conf'], `${HEADER}\n`);
       assert.equal(files['aster.d/phones.conf'], `${HEADER}\n`);
       assert.equal(files['aster.d/quectel-devices.conf'], `${DEVICES_HEADER}\n`);
       assert.equal(files['aster.d/dongle-devices.conf'], `${DEVICES_HEADER}\n`);
-      assert.deepEqual(scan(files['aster.d/modems.conf'] ?? '').sections.map((section) => section.name), ['aster-phones-internal', 'aster-jitterbuffer', 'aster-hangup']);
+      assert.deepEqual(scan(files['aster.d/modems.conf'] ?? '').sections.map((section) => section.name), ['aster-phones-internal', 'aster-jitterbuffer', 'aster-outgoing', 'aster-hangup']);
     });
 
     test('enabled selects the radio: a disabled modem is started with its radio off, an enabled unmapped one is stopped', () => {
@@ -147,9 +147,18 @@ describe('generators', () => {
     });
 
     test('the outbound patterns dial the modem\'s global with OUTBOUND_DIAL_TIMEOUT, whatever ring_timeout is', () => {
+      const record = (/** @type {string} */ number) => ` same => n,GosubIf($["\${ASTER_MODEM}"=""]?aster-outgoing,s,1(gsm1,${number}))\n`;
       assert.equal(contextOf(modems(registryWith({ ring_timeout: 30 })), 'aster-out-gsm1'),
-        `[aster-out-gsm1]\nexten => _+X.,1,${JITTERBUFFER}\n same => n,Dial(\${GSM1}/\${EXTEN},${OUTBOUND_DIAL_TIMEOUT})\n same => n,Hangup()\n`
-        + `exten => _*X.,1,${JITTERBUFFER}\n same => n,Dial(\${GSM1}/\${EXTEN:1},${OUTBOUND_DIAL_TIMEOUT})\n same => n,Hangup()\n`);
+        `[aster-out-gsm1]\nexten => _+X.,1,${JITTERBUFFER}\n${record('${EXTEN}')} same => n,Dial(\${GSM1}/\${EXTEN},${OUTBOUND_DIAL_TIMEOUT})\n same => n,Hangup()\n`
+        + `exten => _*X.,1,${JITTERBUFFER}\n${record('${EXTEN:1}')} same => n,Dial(\${GSM1}/\${EXTEN:1},${OUTBOUND_DIAL_TIMEOUT})\n same => n,Hangup()\n`);
+    });
+
+    test('an outgoing call is recorded: aster-outgoing sets the modem, the number dialed and the direction, then pushes aster-hangup', () => {
+      const text = modems(registryWith());
+      assert.equal(contextOf(text, 'aster-outgoing'), ['[aster-outgoing]', 'exten => s,1,Set(ASTER_MODEM=${ARG1})', ' same => n,Set(ASTER_DID=${ARG2})',
+        ' same => n,Set(ASTER_DIRECTION=out)', ' same => n,Set(CHANNEL(hangup_handler_push)=aster-hangup,s,1)', ' same => n,Return()', ''].join('\n'));
+      // the direction is the last field, so a line from an older dialplan without it still decodes
+      assert.match(contextOf(text, 'aster-hangup'), /"\$\{BASE64_ENCODE\(x\$\{DIALEDTIME\}\)\}" "\$\{ASTER_DIRECTION\}"\)\n/);
     });
 
     test('a phone gets its jitter buffer from the hand-owned global PHONE_JITTERBUFFER: the caller in aster-out-<id>, a called phone in Dial\'s b() handler', () => {

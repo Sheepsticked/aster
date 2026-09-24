@@ -827,13 +827,35 @@ test.describe('the calls page', () => {
 
   test('shows every outcome as a word and filters by it', async ({ page }) => {
     const list = page.locator('#calls-list');
-    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toBeVisible();
+    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true }).first()).toBeVisible();
     await expect(list.getByText(ru['calls.outcome_missed']).filter({ visible: true })).toBeVisible();
 
     const filters = await openSection(page, 'calls-filters');
     await filters.getByLabel(ru['calls.outcome']).selectOption('missed');
-    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toBeHidden();
+    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toHaveCount(0);
     await expect(list.getByText('+375447654321').filter({ visible: true })).toBeVisible();
+  });
+
+  test('shows each call\'s direction, filters by it, and adds up the talk time per SIM', async ({ page }, info) => {
+    const list = page.locator('#calls-list');
+    const row = (/** @type {string} */ text) => list.locator('tr, li').filter({ hasText: text }).filter({ visible: true });
+    await expect(row('+1234567891').getByText(ru['calls.direction_out'])).toBeVisible();
+    await expect(row('+1234567892').getByText(ru['calls.outcome_unanswered'])).toBeVisible();
+    await expect(row('+375447654321').getByText(ru['calls.direction_in'])).toBeVisible();
+
+    const filters = await openSection(page, 'calls-filters');
+    await filters.getByLabel(ru['calls.direction']).selectOption('out');
+    await expect(list.getByText('+375447654321').filter({ visible: true })).toBeHidden();
+    await expect(list.getByText('504').filter({ visible: true })).toBeVisible();
+
+    // gsm1: one outgoing call of 312 s and one incoming of 96 s; this month or last, as the mock's times fall
+    const talk = await openSection(page, 'calls-talk');
+    const gsm1 = talk.locator('tr, li').filter({ hasText: 'gsm1' }).filter({ visible: true });
+    const value = (/** @type {number} */ m, /** @type {number} */ s) =>
+      ru['calls.talk_value'].replace('{time}', `${m} ${ru['time.m']} ${s} ${ru['time.s']}`).replace('{n}', '1');
+    await expect(gsm1.getByText(value(5, 12))).toBeVisible();
+    await expect(gsm1.getByText(value(1, 36))).toBeVisible();
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-calls-talk.png`, fullPage: true });
   });
 
   test('deletes one call after the confirmation, and with a filter Delete all takes only what the list shows', async ({ page }, info) => {
@@ -849,7 +871,7 @@ test.describe('the calls page', () => {
 
     const filters = await openSection(page, 'calls-filters');
     await filters.getByLabel(ru['calls.outcome']).selectOption('failed');
-    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toBeHidden();
+    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toHaveCount(0);
     await press(list.getByRole('button', { name: ru['common.delete_all'] }));
     await expect(dialog.getByText(ru['calls.clear_title'].replace('{n}', '1'))).toBeVisible({ timeout: 15_000 });
     await page.screenshot({ path: `test-results/screens/${info.project.name}-calls-clear-confirm.png` });
@@ -858,7 +880,7 @@ test.describe('the calls page', () => {
     await expect(list.getByText(ru['calls.none'])).toBeVisible();
 
     await filters.getByLabel(ru['calls.outcome']).selectOption('');
-    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true })).toBeVisible();
+    await expect(list.getByText(ru['calls.outcome_answered']).filter({ visible: true }).first()).toBeVisible();
   });
 });
 

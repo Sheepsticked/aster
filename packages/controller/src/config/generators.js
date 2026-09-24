@@ -48,14 +48,29 @@ const JITTERBUFFER = 'ExecIf($["${PHONE_JITTERBUFFER}"!=""]?Set(JITTERBUFFER(${P
 /** The context Dial's b() runs on a called phone, and the option that names it. */
 const JITTERBUFFER_CONTEXT = 'aster-jitterbuffer';
 const RING_OPTIONS = `mb(${JITTERBUFFER_CONTEXT}^s^1)`;
-/** aster-out-<id> after its header; placeholders %GLOBAL% (the modem's global) and %TIMEOUT% (OUTBOUND_DIAL_TIMEOUT). */
+/** The context that records a call a phone makes; a channel that already has a modem (an incoming call sent on) keeps its record. */
+const OUTGOING_CONTEXT = 'aster-outgoing';
+/** @param {string} number  the dialplan expression of the number dialed */
+const recordOutgoing = (number) => ` same => n,GosubIf($["\${ASTER_MODEM}"=""]?${OUTGOING_CONTEXT},s,1(%ID%,${number}))`;
+/** aster-out-<id> after its header; placeholders %ID%, %GLOBAL% (the modem's global) and %TIMEOUT% (OUTBOUND_DIAL_TIMEOUT). */
 const OUTBOUND = [
   `exten => _+X.,1,${JITTERBUFFER}`,
+  recordOutgoing('${EXTEN}'),
   ' same => n,Dial(${%GLOBAL%}/${EXTEN},%TIMEOUT%)',
   ' same => n,Hangup()',
   `exten => _*X.,1,${JITTERBUFFER}`,
+  recordOutgoing('${EXTEN:1}'),
   ' same => n,Dial(${%GLOBAL%}/${EXTEN:1},%TIMEOUT%)',
   ' same => n,Hangup()',
+];
+/** Sets what the hangup handler reports for an outgoing call (ARG1 the modem, ARG2 the number dialed) and pushes it. */
+const OUTGOING = [
+  `[${OUTGOING_CONTEXT}]`,
+  'exten => s,1,Set(ASTER_MODEM=${ARG1})',
+  ' same => n,Set(ASTER_DID=${ARG2})',
+  ' same => n,Set(ASTER_DIRECTION=out)',
+  ' same => n,Set(CHANNEL(hangup_handler_push)=aster-hangup,s,1)',
+  ' same => n,Return()',
 ];
 /** The pre-dial handler of the ring groups. */
 const JITTERBUFFER_HANDLER = [
@@ -63,10 +78,10 @@ const JITTERBUFFER_HANDLER = [
   `exten => s,1,${JITTERBUFFER}`,
   ' same => n,Return()',
 ];
-/** The shared hangup handler every carrier call pushes. */
+/** The shared hangup handler of every carrier call, incoming and outgoing (ASTER_DIRECTION is empty for incoming). */
 const HANGUP = [
   '[aster-hangup]',
-  'exten => s,1,System(/usr/local/bin/aster-emit call-end "${ASTER_MODEM}" "${UNIQUEID}" "${BASE64_ENCODE(x${CALLERID(num)})}" "${BASE64_ENCODE(x${ASTER_DID})}" "${BASE64_ENCODE(x${DIALSTATUS})}" "${BASE64_ENCODE(x${ANSWEREDTIME})}" "${BASE64_ENCODE(x${CDR(disposition)})}" "${BASE64_ENCODE(x${HANGUPCAUSE})}" "${BASE64_ENCODE(x${DIALEDTIME})}")',
+  'exten => s,1,System(/usr/local/bin/aster-emit call-end "${ASTER_MODEM}" "${UNIQUEID}" "${BASE64_ENCODE(x${CALLERID(num)})}" "${BASE64_ENCODE(x${ASTER_DID})}" "${BASE64_ENCODE(x${DIALSTATUS})}" "${BASE64_ENCODE(x${ANSWEREDTIME})}" "${BASE64_ENCODE(x${CDR(disposition)})}" "${BASE64_ENCODE(x${HANGUPCAUSE})}" "${BASE64_ENCODE(x${DIALEDTIME})}" "${ASTER_DIRECTION}")',
   ' same => n,Return()',
 ];
 
@@ -104,7 +119,7 @@ export function globals(reg) {
  * aster.d/modems.conf: per modem the carrier ingress aster-in-<id> (into incoming_context, else aster-ring-<id>), the
  * ring group aster-ring-<id> (only when incoming_context is null; with ring: [] it hangs up at once, so the call is
  * recorded as missed), the outbound patterns aster-out-<id> and the endpoint context aster-phones-<id>; then the shared
- * aster-phones-internal, aster-jitterbuffer (JITTERBUFFER above) and aster-hangup.
+ * aster-phones-internal, aster-jitterbuffer (JITTERBUFFER above), aster-outgoing and aster-hangup.
  * @param {Registry} reg
  */
 export function modems(reg) {
@@ -122,12 +137,12 @@ export function modems(reg) {
           ' same => n,Hangup()');
       }
     }
-    lines.push('', `[aster-out-${id}]`, ...fill(OUTBOUND, { '%GLOBAL%': id.toUpperCase(), '%TIMEOUT%': String(OUTBOUND_DIAL_TIMEOUT) }),
+    lines.push('', `[aster-out-${id}]`, ...fill(OUTBOUND, { '%ID%': id, '%GLOBAL%': id.toUpperCase(), '%TIMEOUT%': String(OUTBOUND_DIAL_TIMEOUT) }),
       '', commented(`[aster-phones-${id}]`, `endpoint context for phones with outbound: ${id}`), 'include => internal',
       `include => aster-out-${id}`, '');
   }
   lines.push(commented('[aster-phones-internal]', 'endpoint context for phones with outbound: null'), 'include => internal', '',
-    ...JITTERBUFFER_HANDLER, '', ...HANGUP);
+    ...JITTERBUFFER_HANDLER, '', ...OUTGOING, '', ...HANGUP);
   return fileText(lines);
 }
 

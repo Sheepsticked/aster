@@ -3,11 +3,11 @@
 // event. Anything else throws a DecodeError whose reason names the field, never its value (no SMS text or numbers in logs).
 
 /** @typedef {'sms' | 'call-end' | 'sms-report'} Kind */
-/** @typedef {'b64x' | 'b64' | 'type' | 'flag'} Codec */
+/** @typedef {'b64x' | 'b64' | 'type' | 'flag' | 'direction'} Codec */
 /** @typedef {{ sender: string, text: string, scts: string }} SmsData */
 /**
  * @typedef {{ caller: string, did: string, dialstatus: string, answeredtime: string, disposition: string, hangupcause: string,
- *   dialedtime: string }} CallEndData
+ *   dialedtime: string, direction: 'in' | 'out' }} CallEndData  an outgoing call: caller is the phone, did the number it dialed
  */
 /** @typedef {{ payload: string, type: 'i' | 'e' | 't', success: '0' | '1', scts: string, dt: string, report: string }} SmsReportData */
 /**
@@ -34,9 +34,12 @@ const spec = (...fields) => Object.freeze(fields.map((field) => Object.freeze(fi
 export const KINDS = Object.freeze({
   sms: spec(['sender', 'b64x'], ['text', 'b64'], ['scts', 'b64x']),
   'call-end': spec(['caller', 'b64x'], ['did', 'b64x'], ['dialstatus', 'b64x'], ['answeredtime', 'b64x'], ['disposition', 'b64x'],
-    ['hangupcause', 'b64x'], ['dialedtime', 'b64x']),
+    ['hangupcause', 'b64x'], ['dialedtime', 'b64x'], ['direction', 'direction']),
   'sms-report': spec(['payload', 'b64x'], ['type', 'type'], ['success', 'flag'], ['scts', 'b64x'], ['dt', 'b64x'], ['report', 'b64x']),
 });
+
+/** How many trailing fields a line written by an older dialplan may lack; they decode as `-`. */
+const OPTIONAL = Object.freeze(/** @type {Partial<Record<Kind, number>>} */ ({ 'call-end': 1 }));
 
 /**
  * SMS_REPORT_TYPE in the spool → `Type` of the AMI …Report event, as both drivers set them: `i` submit result (+CMGS or a send
@@ -121,6 +124,10 @@ function decodeField(field, codec) {
     case 'flag':
       if (field === '0' || field === '1') return field;
       throw new DecodeError('must be 0 or 1');
+    case 'direction':
+      if (field === '-' || field === 'in') return 'in';
+      if (field === 'out') return 'out';
+      throw new DecodeError('must be in, out or -');
     default:
       throw new Error(`unknown codec ${String(codec)}`);
   }
@@ -138,8 +145,11 @@ export function parseLine(line) {
   const kind = columns[1] ?? '';
   if (!Object.hasOwn(KINDS, kind)) throw new DecodeError('unknown kind');
   const fieldSpec = KINDS[/** @type {Kind} */ (kind)];
-  if (columns.length !== 6 + fieldSpec.length) {
-    throw new DecodeError(`${kind}: expected ${6 + fieldSpec.length} TAB-separated columns, found ${columns.length}`);
+  const most = 6 + fieldSpec.length;
+  const least = most - (OPTIONAL[/** @type {Kind} */ (kind)] ?? 0);
+  if (columns.length < least || columns.length > most) {
+    const expected = least === most ? `${most}` : `${least} or ${most}`;
+    throw new DecodeError(`${kind}: expected ${expected} TAB-separated columns, found ${columns.length}`);
   }
   const [, , id = '', modem = '', emitted = '', uniqueid = '', ...fields] = columns;
   const idParts = EVENT_ID.exec(id);
@@ -154,7 +164,7 @@ export function parseLine(line) {
   /** @type {Record<string, string>} */
   const data = {};
   for (const [index, [name, codec]] of fieldSpec.entries()) {
-    const field = fields[index] ?? '';
+    const field = fields[index] ?? '-';
     const where = `field ${index + 1} (${name})`;
     if (field === '') throw new DecodeError(`${where} is empty`);
     try {

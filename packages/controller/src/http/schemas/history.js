@@ -1,6 +1,7 @@
 // @ts-check
 // Aster controller — JSON schemas of the history routes (messages, calls, notifications, operations, logs).
 // Query fields are strings with patterns, parsed by the route; `q` is a plain substring, not a pattern.
+import { OUTCOMES } from '../../calls/outcome.js';
 import { MAX_Q, PAGE_QUERY } from '../page.js';
 
 const MODEM = { type: 'string', pattern: '^[a-z][a-z0-9_]{0,15}$' };
@@ -10,8 +11,17 @@ const query = (properties) => ({ querystring: { type: 'object', additionalProper
 /** GET /api/messages — inbox and outbox in one list, newest first. */
 export const messages = query({ direction: { enum: ['in', 'out'] }, modem: MODEM, status: { type: 'string', maxLength: 32 } });
 
+const DIRECTION = { enum: ['in', 'out'] };
+const OUTCOME = { enum: [...OUTCOMES] };
+const EPOCH_MS = { type: 'string', pattern: '^[0-9]{1,15}$' };
+
 /** GET /api/calls. */
-export const calls = query({ modem: MODEM, outcome: { enum: ['answered', 'missed', 'failed'] } });
+export const calls = query({ modem: MODEM, direction: DIRECTION, outcome: OUTCOME });
+
+/** GET /api/calls/summary — the calls that ended at or after `since` and before `until` (epoch ms). */
+export const callsSummary = ({
+  querystring: { type: 'object', required: ['since'], additionalProperties: false, properties: { since: EPOCH_MS, until: EPOCH_MS } },
+});
 
 /** GET /api/notifications. */
 export const notifications = query({
@@ -73,7 +83,7 @@ export const messagesPurge = body({
 
 /** POST /api/calls/purge — what GET /api/calls lists with the same filters. */
 export const callsPurge = body({
-  modem: MODEM, outcome: { enum: ['answered', 'missed', 'failed'] }, q: { type: 'string', maxLength: MAX_Q }, before: BEFORE,
+  modem: MODEM, direction: DIRECTION, outcome: OUTCOME, q: { type: 'string', maxLength: MAX_Q }, before: BEFORE,
 });
 
 /** POST /api/sms/purge — without `modem_id`, the SMS of every modem. */

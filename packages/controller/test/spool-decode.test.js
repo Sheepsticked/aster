@@ -18,12 +18,18 @@ const base64 = (value) => (typeof value === 'string' ? Buffer.from(value, 'utf8'
 const SMOKE = {
   '1789052155654316892-728-1789052155.1.evt': {
     kind: 'call-end', modem: 'gsm_test', uniqueid: '1789052155.1', emitted: 1789052155, emittedMs: 1789052155654,
-    data: { caller: '`id`;$(id)', did: '', dialstatus: 'CHANUNAVAIL', answeredtime: '', disposition: 'NO ANSWER', hangupcause: '3', dialedtime: '' },
+    data: { caller: '`id`;$(id)', did: '', dialstatus: 'CHANUNAVAIL', answeredtime: '', disposition: 'NO ANSWER', hangupcause: '3', dialedtime: '',
+      direction: 'in' },
   },
   '1789052156669849990-875-1789052156.3.evt': {
     kind: 'call-end', modem: 'gsm_test', uniqueid: '1789052156.3', emitted: 1789052156, emittedMs: 1789052156669,
     data: { caller: '+375290000001', did: '+1234567890', dialstatus: 'CHANUNAVAIL', answeredtime: '', disposition: 'NO ANSWER',
-      hangupcause: '3', dialedtime: '' },
+      hangupcause: '3', dialedtime: '', direction: 'in' },
+  },
+  '1790239200724224715-977-1790239200.5.evt': {
+    kind: 'call-end', modem: 'gsm_test', uniqueid: '1790239200.5', emitted: 1790239200, emittedMs: 1790239200724,
+    data: { caller: '599', did: '+1234567890', dialstatus: 'CHANUNAVAIL', answeredtime: '', disposition: 'NO ANSWER', hangupcause: '44',
+      dialedtime: '', direction: 'out' },
   },
   '1789052157042129481-936-1789052157.5.evt': {
     kind: 'sms', modem: 'gsm_test', uniqueid: '1789052157.5', emitted: 1789052157, emittedMs: 1789052157042,
@@ -39,12 +45,19 @@ const TAB = String.fromCharCode(9);
 /** What aster-emit was given for each file of valid/. */
 const VALID = {
   'call-end-absent-fields.evt': { kind: 'call-end', modem: 'gsm1', uniqueid: '1789000005.16',
-    data: { caller: '', did: '', dialstatus: '', answeredtime: '', disposition: '', hangupcause: '', dialedtime: '' } },
+    data: { caller: '', did: '', dialstatus: '', answeredtime: '', disposition: '', hangupcause: '', dialedtime: '', direction: 'in' } },
   'call-end-answered.evt': { kind: 'call-end', modem: 'gsm1', uniqueid: '1789000003.14',
     data: { caller: '+375291112233', did: '+375290000001', dialstatus: 'ANSWER', answeredtime: '42', disposition: 'ANSWERED', hangupcause: '16',
-      dialedtime: '57' } },
+      dialedtime: '57', direction: 'in' } },
   'call-end-non-numeric.evt': { kind: 'call-end', modem: 'gsm2', uniqueid: '1789000006.17',
-    data: { caller: '', did: '', dialstatus: 'ANSWER', answeredtime: '1.5', disposition: 'ANSWERED', hangupcause: '-1', dialedtime: ' 7' } },
+    data: { caller: '', did: '', dialstatus: 'ANSWER', answeredtime: '1.5', disposition: 'ANSWERED', hangupcause: '-1', dialedtime: ' 7',
+      direction: 'in' } },
+  'call-end-incoming-dash.evt': { kind: 'call-end', modem: 'gsm2', uniqueid: '1789000014.25',
+    data: { caller: '+1234567891', did: '', dialstatus: 'NOANSWER', answeredtime: '', disposition: 'NO ANSWER', hangupcause: '16', dialedtime: '30',
+      direction: 'in' } },
+  'call-end-outgoing.evt': { kind: 'call-end', modem: 'gsm1', uniqueid: '1789000013.24',
+    data: { caller: '599', did: '+1234567890', dialstatus: 'ANSWER', answeredtime: '42', disposition: 'ANSWERED', hangupcause: '16', dialedtime: '51',
+      direction: 'out' } },
   'sms-alphanumeric-sender.evt': { kind: 'sms', modem: 'gsm2', uniqueid: '1789000001.12',
     data: { sender: 'MTS Bank', text: 'Kod 4821. Nikomu ne soobshchayte.', scts: '2026-09-10 12:35:01 +03:00' } },
   'sms-anonymous-empty.evt': { kind: 'sms', modem: 'gsm1', uniqueid: '1789000002.13', data: { sender: '', text: '', scts: '' } },
@@ -60,7 +73,8 @@ const VALID = {
 
 /** One problem per file of malformed/ and the reason it is refused with. */
 const MALFORMED = {
-  'call-end-eight-fields.evt': 'call-end: expected 13 TAB-separated columns, found 14',
+  'call-end-bad-direction.evt': 'field 8 (direction): must be in, out or -',
+  'call-end-nine-fields.evt': 'call-end: expected 13 or 14 TAB-separated columns, found 15',
   'call-end-no-uniqueid.evt': 'call-end without uniqueid',
   'crlf.evt': 'CR in the line (CRLF line end?)',
   'emitted-mismatch.evt': 'emitted_epoch_s does not match the nanoseconds of the event id',
@@ -172,7 +186,7 @@ describe('spool decode', () => {
   test('every kind keeps its field list, and report types i/e/t are the AMI Types 0/1/2', () => {
     assert.deepEqual(Object.fromEntries(Object.entries(KINDS).map(([kind, fields]) => [kind, fields.map(([name]) => name)])), {
       sms: ['sender', 'text', 'scts'],
-      'call-end': ['caller', 'did', 'dialstatus', 'answeredtime', 'disposition', 'hangupcause', 'dialedtime'],
+      'call-end': ['caller', 'did', 'dialstatus', 'answeredtime', 'disposition', 'hangupcause', 'dialedtime', 'direction'],
       'sms-report': ['payload', 'type', 'success', 'scts', 'dt', 'report'],
     });
     assert.deepEqual({ ...REPORT_TYPES }, { i: 0, e: 1, t: 2 });

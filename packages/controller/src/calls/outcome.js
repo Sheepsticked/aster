@@ -1,11 +1,15 @@
 // @ts-check
-// Call outcome from the fields the hangup handler spools: `answered`, `missed` (the Dial did not connect, or nothing was
-// dialed) or `failed`. DIALSTATUS is compared in upper case, as app_dial ignores its case.
+// Call outcome from the fields the hangup handler spools: `answered`, `missed` (an incoming call the Dial did not connect,
+// or nothing was dialed), `unanswered` (an outgoing call that was busy, not answered or cancelled) or `failed`. DIALSTATUS
+// is compared in upper case, as app_dial ignores its case.
 
-/** @typedef {'answered' | 'missed' | 'failed'} Outcome */
-/** @typedef {{ dialstatus: string, answeredtime: string, disposition: string }} CallFacts  the decoded spool fields ('' when empty) */
+/** @typedef {'answered' | 'missed' | 'unanswered' | 'failed'} Outcome */
+/**
+ * @typedef {{ dialstatus: string, answeredtime: string, disposition: string, direction?: 'in' | 'out' }} CallFacts  the decoded
+ *   spool fields ('' when empty)
+ */
 
-export const OUTCOMES = Object.freeze(/** @type {const} */ (['answered', 'missed', 'failed']));
+export const OUTCOMES = Object.freeze(/** @type {const} */ (['answered', 'missed', 'unanswered', 'failed']));
 /** DIALSTATUS values of a missed call → the reason a missed-call notification names. */
 export const MISSED_REASONS = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
   NOANSWER: 'no answer',
@@ -15,15 +19,18 @@ export const MISSED_REASONS = Object.freeze(/** @type {Readonly<Record<string, s
   CHANUNAVAIL: 'no phone reachable',
   '': 'nobody was dialed',
 }));
+/** DIALSTATUS values of an outgoing call that reached the network but nobody answered. */
+const UNANSWERED = Object.freeze(['NOANSWER', 'BUSY', 'CANCEL']);
 const WHOLE_NUMBER = /^[0-9]{1,15}$/;
 
 /**
  * @param {CallFacts} facts
  * @returns {Outcome}
  */
-export function outcome({ dialstatus, answeredtime, disposition }) {
+export function outcome({ dialstatus, answeredtime, disposition, direction = 'in' }) {
   const status = dialstatus.toUpperCase();
   if (status === 'ANSWER' || disposition === 'ANSWERED' || (WHOLE_NUMBER.test(answeredtime) && Number(answeredtime) > 0)) return 'answered';
+  if (direction === 'out') return UNANSWERED.includes(status) ? 'unanswered' : 'failed';
   return Object.hasOwn(MISSED_REASONS, status) ? 'missed' : 'failed';
 }
 

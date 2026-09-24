@@ -1,6 +1,6 @@
 // @ts-check
-// Tests for src/calls/outcome.js: every documented DIALSTATUS with each ANSWEREDTIME and disposition, unexpected values,
-// missed-call reasons, and the captured call-end events of test/fixtures/spool/calls.
+// Tests for src/calls/outcome.js: every documented DIALSTATUS with each ANSWEREDTIME and disposition, both directions,
+// unexpected values, missed-call reasons, and the captured call-end events of test/fixtures/spool/calls.
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
@@ -36,6 +36,19 @@ describe('outcome of a call', () => {
       }
     }
     assert.equal(cases, 90);
+  });
+
+  test('an outgoing call is answered, unanswered (no answer, busy, cancelled) or failed, never missed', () => {
+    /** @type {Record<string, string>} */
+    const OUT = { ANSWER: 'answered', NOANSWER: 'unanswered', BUSY: 'unanswered', CANCEL: 'unanswered', CONGESTION: 'failed', CHANUNAVAIL: 'failed',
+      '': 'failed', DONTCALL: 'failed', TORTURE: 'failed', INVALIDARGS: 'failed' };
+    assert.deepEqual(Object.keys(OUT).sort(), Object.keys(BY_STATUS).sort());
+    for (const [dialstatus, expected] of Object.entries(OUT)) {
+      assert.equal(outcome({ dialstatus, answeredtime: '', disposition: 'NO ANSWER', direction: 'out' }), expected, dialstatus);
+      assert.equal(outcome({ dialstatus, answeredtime: '37', disposition: 'NO ANSWER', direction: 'out' }), 'answered', dialstatus);
+    }
+    assert.equal(outcome({ dialstatus: 'busy', answeredtime: '', disposition: '', direction: 'out' }), 'unanswered');
+    assert.equal(outcome({ dialstatus: 'NOANSWER', answeredtime: '', disposition: '', direction: 'in' }), 'missed');
   });
 
   test('the statuses app_dial documents are exactly the ones of the table', () => {

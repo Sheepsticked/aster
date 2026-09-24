@@ -53,7 +53,8 @@ it decided — the port, and which images the appliance runs — it writes to `.
 ## What you get
 
 - **Inbound calls.** A call to a SIM rings the phones you picked for it. Ring groups are a list of checkboxes.
-- **Outbound calls.** Each phone dials out through the modem you assign it.
+- **Outbound calls.** Each phone dials out through the modem you assign it. Outgoing calls show in the call history too,
+  and the Calls page adds up the talk time per SIM for this month and last month.
 - **SMS.** Incoming messages appear in the UI and in Telegram. You can send from the UI, with delivery reports and
   retry, and delete one SMS or the whole list (calls too). SMS and calls older than 180 days are deleted
   automatically; Settings changes how long they are kept.

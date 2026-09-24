@@ -89,7 +89,7 @@ const INSERT_EVENT = `INSERT INTO events (id, kind, modem_id, uniqueid, emitted_
 const SELECT_EVENT = 'SELECT kind, modem_id, uniqueid, emitted_at, fields_json FROM events WHERE id = ?';
 const INSERT_MESSAGE = 'INSERT INTO messages (event_id, modem_id, sender, text, scts, received_at) VALUES (?, ?, ?, ?, ?, ?)';
 const INSERT_CALL = `INSERT INTO calls (event_id, modem_id, uniqueid, caller, did, dialstatus, answered_sec, dialed_sec, disposition,
-  hangupcause, outcome, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uniqueid) DO NOTHING`;
+  hangupcause, outcome, ended_at, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (uniqueid) DO NOTHING`;
 
 /**
  * @param {unknown} err
@@ -141,7 +141,7 @@ function derive(db, event, hooks) {
     const outcome = hooks.outcome ? hooks.outcome(data) : 'pending';
     const { changes, lastInsertRowid } = db.prepare(INSERT_CALL).run(event.id, event.modem, event.uniqueid, nullIfEmpty(data.caller),
       nullIfEmpty(data.did), nullIfEmpty(data.dialstatus), integerOrNull(data.answeredtime), integerOrNull(data.dialedtime),
-      nullIfEmpty(data.disposition), integerOrNull(data.hangupcause), outcome, event.emittedMs);
+      nullIfEmpty(data.disposition), integerOrNull(data.hangupcause), outcome, event.emittedMs, data.direction);
     rowId = Number(changes) === 1 ? Number(lastInsertRowid) : null;
   } else {
     const { data } = event;

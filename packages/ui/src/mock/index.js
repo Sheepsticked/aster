@@ -180,7 +180,29 @@ function filtered(rows, query, { eq = {}, search = [] } = {}) {
 }
 
 const MESSAGE_FILTERS = { eq: { modem: 'modem_id', status: 'status' }, search: ['number', 'text'] };
-const CALL_FILTERS = { eq: { modem: 'modem_id', outcome: 'outcome' }, search: ['caller', 'did'] };
+const CALL_FILTERS = { eq: { modem: 'modem_id', direction: 'direction', outcome: 'outcome' }, search: ['caller', 'did'] };
+
+/**
+ * GET /api/calls/summary: calls, answered calls and their talk time per modem and direction.
+ * @param {any[]} rows @param {URLSearchParams} query
+ */
+function callSummary(rows, query) {
+  const since = Number(query.get('since') ?? '0');
+  const until = query.get('until') === null ? null : Number(query.get('until'));
+  /** @type {Map<string, any>} */
+  const groups = new Map();
+  for (const row of rows.filter((call) => call.ended_at >= since && (until === null || call.ended_at < until))) {
+    const key = `${row.modem_id} ${row.direction}`;
+    const entry = groups.get(key) ?? { modem_id: row.modem_id, direction: row.direction, calls: 0, answered: 0, answered_sec: 0 };
+    entry.calls += 1;
+    if (row.outcome === 'answered') {
+      entry.answered += 1;
+      entry.answered_sec += row.answered_sec ?? 0;
+    }
+    groups.set(key, entry);
+  }
+  return json({ since, until, items: [...groups.keys()].sort().map((key) => groups.get(key)) });
+}
 
 /**
  * The messages of one direction; a status filter implies the outbox, as in the controller.
@@ -288,6 +310,7 @@ async function answer(method, path, body, query = new URLSearchParams()) {
     return json({ deleted: row.id });
   }
   if (path === '/api/calls' && method === 'GET') return listPage(state.calls, query, CALL_FILTERS);
+  if (path === '/api/calls/summary' && method === 'GET') return callSummary(state.calls, query);
   if (path === '/api/calls/purge' && method === 'POST') {
     const gone = filtered(state.calls, purgeQuery(body), CALL_FILTERS)
       .filter((/** @type {any} */ row) => body?.before === undefined || row.ended_at <= body.before);

@@ -1,5 +1,6 @@
-<!-- Calls page: recorded calls, newest first, with the controller-derived outcome (never re-derived here).
-     Filter by outcome, substring search on caller/DID; delete per row or "Delete all" for the current filter. -->
+<!-- Calls page: incoming and outgoing calls, newest first, with the controller-derived outcome (never re-derived here), and
+     the talk time per SIM of this month and last month. Filters, substring search on caller/DID; delete per row or "Delete
+     all" for the current filter. -->
 <script>
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
@@ -16,7 +17,14 @@
   import { toasts } from '../lib/toasts.svelte.js';
 
   /** The outcomes (calls/outcome.js) and the tone each one is shown with. */
-  const TONE = Object.freeze(/** @type {Record<string, 'ok' | 'warn' | 'bad'>} */ ({ answered: 'ok', missed: 'warn', failed: 'bad' }));
+  const TONE = Object.freeze(/** @type {Record<string, 'ok' | 'warn' | 'bad' | 'neutral'>} */ ({
+    answered: 'ok', missed: 'warn', unanswered: 'neutral', failed: 'bad',
+  }));
+  /** The talk-time columns: which direction and which month. */
+  const TALK = Object.freeze(/** @type {const} */ ([
+    { key: 'talk_out_month', direction: 'out', month: 'month' }, { key: 'talk_out_last', direction: 'out', month: 'last' },
+    { key: 'talk_in_month', direction: 'in', month: 'month' }, { key: 'talk_in_last', direction: 'in', month: 'last' },
+  ]));
 
   /** @type {any} */
   let data = $state(null);
@@ -26,7 +34,11 @@
   let error = $state(null);
   let loading = $state(false);
   let page = $state(1);
-  let filters = $state({ modem: '', outcome: '', q: '' });
+  let filters = $state({ modem: '', direction: '', outcome: '', q: '' });
+  /** GET /api/calls/summary of this month and last month (the browser's months, as every time on the page). */
+  let talk = $state(/** @type {{ month: any[], last: any[] } | null} */ (null));
+  /** @type {string | null} */
+  let talkError = $state(null);
 
   /** Pending deletes; "Delete all" is bounded by the newest call so one ending meanwhile is kept. */
   let deleting = $state(/** @type {any | null} */ (null));
@@ -47,11 +59,31 @@
     }
   }
 
+  async function loadTalk() {
+    const now = new Date();
+    const month = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const last = new Date(now.getFullYear(), now.getMonth() - 1, 1).getTime();
+    try {
+      const [thisMonth, lastMonth] = await Promise.all([api.callsSummary({ since: month }), api.callsSummary({ since: last, until: month })]);
+      talk = { month: thisMonth?.items ?? [], last: lastMonth?.items ?? [] };
+      talkError = null;
+    } catch (err) {
+      talkError = messageOf(err);
+    }
+  }
+
+  $effect(() => {
+    void live.resume;
+    void live.finished;
+    void loadTalk();
+  });
+
   $effect(() => {
     void live.resume;
     void live.finished;
     void page;
     void filters.modem;
+    void filters.direction;
     void filters.outcome;
     void filters.q;
     void load();
@@ -79,7 +111,7 @@
       await api.deleteCall(deleting.id);
       toasts.push({ kind: 'success', text: t('calls.deleted') });
       deleteOpen = false;
-      await load();
+      await Promise.all([load(), loadTalk()]);
     } catch (err) {
       deleteOpen = false;
       toasts.push({ kind: 'error', text: messageOf(err) });
@@ -114,7 +146,7 @@
       toasts.push(deleted > 0 ? { kind: 'success', text: t('calls.purged', { n: deleted }) } : { text: t('calls.purge_none') });
       clearOpen = false;
       page = 1;
-      await load();
+      await Promise.all([load(), loadTalk()]);
     } catch (err) {
       clearOpen = false;
       toasts.push({ kind: 'error', text: messageOf(err) });
@@ -130,9 +162,28 @@
     return minutes === 0 ? `${seconds} ${t('time.s')}` : `${minutes} ${t('time.m')} ${seconds % 60} ${t('time.s')}`;
   }
 
+  /** One summary entry as "34 m 12 s · 5 calls", or none when nothing was answered. @param {any} entry */
+  const talkValue = (entry) => (entry?.answered > 0 ? t('calls.talk_value', { time: duration(entry.answered_sec), n: entry.answered }) : t('common.none'));
+  /** One row per modem of the registry or of the summary, with its entry for each talk-time column. */
+  const talkRows = $derived.by(() => {
+    if (talk === null) return [];
+    const { month, last } = talk;
+    const ids = new Set([...modems.map((modem) => modem.id), ...month.map((entry) => entry.modem_id), ...last.map((entry) => entry.modem_id)]);
+    return [...ids].sort().map((id) => ({
+      id,
+      ...Object.fromEntries(TALK.map(({ key, direction, month: which }) => [key,
+        (which === 'month' ? month : last).find((entry) => entry.modem_id === id && entry.direction === direction)])),
+    }));
+  });
+  const talkColumns = $derived([
+    { key: 'modem', label: t('nav.modem'), primary: true },
+    ...TALK.map(({ key }) => ({ key, label: t(`calls.${key}`) })),
+  ]);
+
   const items = $derived(data?.items ?? []);
   const columns = $derived([
     { key: 'caller', label: t('calls.caller'), primary: true },
+    { key: 'direction', label: t('calls.direction') },
     { key: 'outcome', label: t('calls.outcome') },
     { key: 'did', label: t('calls.did') },
     { key: 'duration', label: t('calls.duration') },
@@ -147,8 +198,29 @@
   <p class="card mb-4 border-rose-200 bg-rose-50 p-4 text-rose-900" role="alert">{error}</p>
 {/if}
 
-<Section id="calls-filters" title={t('list.filters')} subtitle={t('list.filters_hint')}>
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+<Section id="calls-talk" title={t('calls.talk')} subtitle={t('calls.talk_hint')}>
+  {#if talkError !== null}
+    <p class="text-sm text-rose-800" role="alert">{talkError}</p>
+  {/if}
+  <ResponsiveTable
+    columns={talkColumns}
+    rows={talkRows}
+    rowKey={(row) => row.id}
+    label={t('calls.talk')}
+    empty={talk === null ? t('app.loading') : t('calls.none')}
+  >
+    {#snippet cell(/** @type {any} */ row, /** @type {{ key: string }} */ column)}
+      {#if column.key === 'modem'}
+        {row.id}
+      {:else}
+        <span class="tabular-nums">{talkValue(row[column.key])}</span>
+      {/if}
+    {/snippet}
+  </ResponsiveTable>
+</Section>
+
+<Section id="calls-filters" class="mt-3" title={t('list.filters')} subtitle={t('list.filters_hint')}>
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
     <Field id="calls-modem" label={t('nav.modem')}>
       {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
         <select id="calls-modem" class="input" aria-describedby={field.describedBy} value={filters.modem} onchange={(event) => refilter(() => (filters.modem = event.currentTarget.value))}>
@@ -156,6 +228,16 @@
           {#each modems as modem (modem.id)}
             <option value={modem.id}>{modem.id}</option>
           {/each}
+        </select>
+      {/snippet}
+    </Field>
+
+    <Field id="calls-direction" label={t('calls.direction')}>
+      {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+        <select id="calls-direction" class="input" aria-describedby={field.describedBy} value={filters.direction} onchange={(event) => refilter(() => (filters.direction = event.currentTarget.value))}>
+          <option value="">{t('list.any')}</option>
+          <option value="in">{t('calls.direction_in')}</option>
+          <option value="out">{t('calls.direction_out')}</option>
         </select>
       {/snippet}
     </Field>
@@ -191,6 +273,8 @@
     {#snippet cell(/** @type {any} */ call, /** @type {{ key: string }} */ column)}
       {#if column.key === 'caller'}
         <span class="tabular-nums">{call.caller || t('calls.unknown_caller')}</span>
+      {:else if column.key === 'direction'}
+        {t(call.direction === 'out' ? 'calls.direction_out' : 'calls.direction_in')}
       {:else if column.key === 'outcome'}
         <StatusBadge
           text={t(`calls.outcome_${call.outcome}`)}

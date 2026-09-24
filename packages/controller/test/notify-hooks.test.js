@@ -152,6 +152,17 @@ describe('notify ingest hooks', () => {
     assert.equal(notifications().length, 2 + 6 * 2);
   });
 
+  test('an outgoing call never sends a missed-call notification: no answer, busy and cancel are unanswered, the rest failed', () => {
+    const { db, ingest, notifications } = setup();
+    for (const file of ['noanswer', 'busy', 'cancel', 'chanunavail', 'congestion']) {
+      assert.equal(ingest(variant(`calls/${file}.evt`, 1, (columns) => void columns.push('out'))).status, 'ingested', file);
+    }
+    assert.deepEqual(db.prepare('SELECT dialstatus, direction, outcome FROM calls ORDER BY id').all().map((row) => Object.values(row).join(' ')), [
+      'NOANSWER out unanswered', 'BUSY out unanswered', 'CANCEL out unanswered', 'CHANUNAVAIL out failed', 'CONGESTION out failed',
+    ]);
+    assert.deepEqual(notifications(), []);
+  });
+
   test('the missed-call text: the modem id, caller or unknown, the time in the registry timezone, the reason', () => {
     const { ingest, notifications } = setup();
     ingest('calls/did-noanswer.evt');

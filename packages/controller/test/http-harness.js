@@ -204,7 +204,7 @@ export function seed(db, { messages = [], calls = [], notifications = [], outbox
   const event = db.prepare('INSERT INTO events (id, kind, modem_id, uniqueid, emitted_at, received_at, fields_json) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const message = db.prepare('INSERT INTO messages (event_id, modem_id, sender, text, scts, received_at) VALUES (?, ?, ?, ?, ?, ?)');
   const call = db.prepare(`INSERT INTO calls (event_id, modem_id, uniqueid, caller, did, dialstatus, answered_sec, dialed_sec,
-    disposition, hangupcause, outcome, ended_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    disposition, hangupcause, outcome, ended_at, direction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const notification = db.prepare(`INSERT INTO notifications (source_kind, source_id, chat_id, part_no, part_count, text, status,
     attempts, next_at, tg_message_id, error, created_at, sent_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   const sms = db.prepare('INSERT INTO sms_outbox (modem_id, number, text, status, attempt_no, created_at, updated_at, last_error) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -218,7 +218,8 @@ export function seed(db, { messages = [], calls = [], notifications = [], outbox
     const id = `c${(n += 1)}`;
     event.run(id, 'call-end', row.modem_id ?? 'gsm1', row.uniqueid ?? id, row.ended_at ?? 0, row.ended_at ?? 0, '{}');
     call.run(id, row.modem_id ?? 'gsm1', row.uniqueid ?? id, row.caller ?? null, row.did ?? null, row.dialstatus ?? null,
-      row.answered_sec ?? null, row.dialed_sec ?? null, row.disposition ?? null, row.hangupcause ?? null, row.outcome ?? 'missed', row.ended_at ?? 0);
+      row.answered_sec ?? null, row.dialed_sec ?? null, row.disposition ?? null, row.hangupcause ?? null, row.outcome ?? 'missed', row.ended_at ?? 0,
+      row.direction ?? 'in');
   }
   for (const row of notifications) {
     notification.run(row.source_kind ?? 'sms', row.source_id ?? null, row.chat_id ?? '100200300', row.part_no ?? 1, row.part_count ?? 1,

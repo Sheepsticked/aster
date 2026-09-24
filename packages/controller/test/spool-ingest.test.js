@@ -157,10 +157,13 @@ describe('spool ingest', () => {
     assert.deepEqual(rows(db, 'SELECT * FROM calls ORDER BY id'), [
       { id: 1, event_id: '1789052155654316892-728-1789052155.1', modem_id: 'gsm_test', uniqueid: '1789052155.1', caller: '`id`;$(id)',
         did: null, dialstatus: 'CHANUNAVAIL', answered_sec: null, dialed_sec: null, disposition: 'NO ANSWER', hangupcause: 3,
-        outcome: 'pending', ended_at: 1789052155654 },
+        outcome: 'pending', ended_at: 1789052155654, direction: 'in' },
       { id: 2, event_id: '1789052156669849990-875-1789052156.3', modem_id: 'gsm_test', uniqueid: '1789052156.3', caller: '+375290000001',
         did: '+1234567890', dialstatus: 'CHANUNAVAIL', answered_sec: null, dialed_sec: null, disposition: 'NO ANSWER', hangupcause: 3,
-        outcome: 'pending', ended_at: 1789052156669 },
+        outcome: 'pending', ended_at: 1789052156669, direction: 'in' },
+      { id: 3, event_id: '1790239200724224715-977-1790239200.5', modem_id: 'gsm_test', uniqueid: '1790239200.5', caller: '599',
+        did: '+1234567890', dialstatus: 'CHANUNAVAIL', answered_sec: null, dialed_sec: null, disposition: 'NO ANSWER', hangupcause: 44,
+        outcome: 'pending', ended_at: 1790239200724, direction: 'out' },
     ]);
     assert.deepEqual(rows(db, 'SELECT * FROM messages'), [
       { id: 1, event_id: '1789052157042129481-936-1789052157.5', modem_id: 'gsm_test', sender: '";touch /tmp/aster-smoke-pwned;"',
@@ -172,12 +175,13 @@ describe('spool ingest', () => {
       ['1789052156669849990-875-1789052156.3', 'call-end', '1789052156.3', 1789052156669, NOW],
       ['1789052157042129481-936-1789052157.5', 'sms', '1789052157.5', 1789052157042, NOW],
       ['1789052157382107899-997-1789052157.7', 'sms-report', '1789052157.7', 1789052157382, NOW],
+      ['1790239200724224715-977-1790239200.5', 'call-end', '1790239200.5', 1790239200724, NOW],
     ]);
     assert.deepEqual(JSON.parse(String(stored[3]?.fields_json)),
       { payload: '42:1', type: 'e', success: '1', scts: '2026-09-10 09:30:05 +0300', dt: '2026-09-10 09:30:07 +0300', report: '+CDS: 6' });
   });
 
-  test('Cyrillic multiline text, alphanumeric and anonymous senders, `-` and non-numeric call fields (→ NULL)', () => {
+  test('Cyrillic multiline text, alphanumeric and anonymous senders, `-` and non-numeric call fields (→ NULL), both directions', () => {
     const { db, events } = setup();
     for (const name of listing('valid/').filter((file) => !file.startsWith('sms-report'))) {
       assert.equal(ingestFile(db, put(events, `valid/${name}`), { now }).status, 'ingested', name);
@@ -188,14 +192,18 @@ describe('spool ingest', () => {
       { sender: 'MTS Bank', text: 'Kod 4821. Nikomu ne soobshchayte.', scts: '2026-09-10 12:35:01 +03:00' },
       { sender: null, text: '', scts: null },
     ]);
-    const calls = rows(db, 'SELECT uniqueid, caller, did, dialstatus, answered_sec, dialed_sec, disposition, hangupcause FROM calls ORDER BY uniqueid');
+    const calls = rows(db, 'SELECT uniqueid, direction, caller, did, dialstatus, answered_sec, dialed_sec, disposition, hangupcause FROM calls ORDER BY uniqueid');
     assert.deepEqual(calls, [
-      { uniqueid: '1789000003.14', caller: '+375291112233', did: '+375290000001', dialstatus: 'ANSWER', answered_sec: 42, dialed_sec: 57,
-        disposition: 'ANSWERED', hangupcause: 16 },
-      { uniqueid: '1789000005.16', caller: null, did: null, dialstatus: null, answered_sec: null, dialed_sec: null, disposition: null,
-        hangupcause: null },
-      { uniqueid: '1789000006.17', caller: null, did: null, dialstatus: 'ANSWER', answered_sec: null, dialed_sec: null,
+      { uniqueid: '1789000003.14', direction: 'in', caller: '+375291112233', did: '+375290000001', dialstatus: 'ANSWER', answered_sec: 42,
+        dialed_sec: 57, disposition: 'ANSWERED', hangupcause: 16 },
+      { uniqueid: '1789000005.16', direction: 'in', caller: null, did: null, dialstatus: null, answered_sec: null, dialed_sec: null,
+        disposition: null, hangupcause: null },
+      { uniqueid: '1789000006.17', direction: 'in', caller: null, did: null, dialstatus: 'ANSWER', answered_sec: null, dialed_sec: null,
         disposition: 'ANSWERED', hangupcause: null },
+      { uniqueid: '1789000013.24', direction: 'out', caller: '599', did: '+1234567890', dialstatus: 'ANSWER', answered_sec: 42, dialed_sec: 51,
+        disposition: 'ANSWERED', hangupcause: 16 },
+      { uniqueid: '1789000014.25', direction: 'in', caller: '+1234567891', did: null, dialstatus: 'NOANSWER', answered_sec: null,
+        dialed_sec: 30, disposition: 'NO ANSWER', hangupcause: 16 },
     ]);
   });
 

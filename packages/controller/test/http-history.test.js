@@ -282,6 +282,51 @@ describe('http sms routes', () => {
     }
   });
 
+  test('calls by direction: the list filter, a purge that keeps the other direction, and the talk time per modem and direction', async () => {
+    const h = await harness();
+    try {
+      const { cookie } = await h.login();
+      h.seed({ calls: [
+        { direction: 'out', caller: '501', did: '+1234567890', outcome: 'answered', answered_sec: 60, ended_at: T + 10 },
+        { direction: 'out', caller: '502', did: '+1234567891', outcome: 'answered', answered_sec: 30, ended_at: T + 20 },
+        { direction: 'out', caller: '501', did: '+1234567892', outcome: 'unanswered', dialstatus: 'BUSY', ended_at: T + 30 },
+        { direction: 'in', caller: '+1234567893', outcome: 'answered', answered_sec: 45, ended_at: T + 40 },
+        { direction: 'out', caller: '511', did: '+1234567894', outcome: 'answered', answered_sec: 125, ended_at: T + 50, modem_id: 'gsm2' },
+        { direction: 'out', caller: '501', did: '+1234567895', outcome: 'answered', answered_sec: 999, ended_at: T + 100 },
+      ] });
+      /** @param {'GET' | 'POST'} method @param {string} url @param {object} [payload] */
+      const send = async (method, url, payload) => {
+        const response = await h.app.inject({ method, url, headers: { cookie }, payload });
+        return [response.statusCode, response.json()];
+      };
+
+      const [, outgoing] = await send('GET', '/api/calls?direction=out');
+      assert.deepEqual([outgoing.total, outgoing.items[0].direction, outgoing.items[0].did], [5, 'out', '+1234567895']);
+      assert.deepEqual((await send('GET', '/api/calls?direction=in&outcome=answered'))[1].items.map((/** @type {any} */ c) => c.caller), ['+1234567893']);
+      assert.deepEqual((await send('GET', '/api/calls?outcome=unanswered'))[1].total, 1);
+
+      const summary = await send('GET', `/api/calls/summary?since=${T}&until=${T + 100}`);
+      assert.deepEqual(summary, [200, { since: T, until: T + 100, items: [
+        { modem_id: 'gsm1', direction: 'in', calls: 1, answered: 1, answered_sec: 45 },
+        { modem_id: 'gsm1', direction: 'out', calls: 3, answered: 2, answered_sec: 90 },
+        { modem_id: 'gsm2', direction: 'out', calls: 1, answered: 1, answered_sec: 125 },
+      ] }], 'until is exclusive, unanswered calls add no time');
+      assert.deepEqual(await send('GET', `/api/calls/summary?since=${T + 100}`), [200, { since: T + 100, until: null, items: [
+        { modem_id: 'gsm1', direction: 'out', calls: 1, answered: 1, answered_sec: 999 },
+      ] }]);
+      for (const query of ['', '?until=1', '?since=abc', `?since=${T}&modem=gsm1`]) {
+        assert.equal((await send('GET', `/api/calls/summary${query}`))[0], 400, query);
+      }
+      for (const url of ['/api/calls?direction=both', '/api/calls/summary?since=-1']) assert.equal((await send('GET', url))[0], 400, url);
+
+      assert.deepEqual(await send('POST', '/api/calls/purge', { direction: 'in' }), [200, { deleted: 1 }]);
+      assert.deepEqual((await send('GET', '/api/calls'))[1].total, 5, 'the outgoing calls stay');
+      assert.equal((await send('POST', '/api/calls/purge', { direction: 'both' }))[0], 400);
+    } finally {
+      await h.stop();
+    }
+  });
+
   test('POST /api/notify/test queues one test notification, and is refused without a usable token', async () => {
     const h = await harness();
     try {

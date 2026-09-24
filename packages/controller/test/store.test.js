@@ -1,8 +1,8 @@
 // @ts-check
-// Tests for src/store/db.js and migrations/001.sql: connection settings, every table with its columns,
+// Tests for src/store/db.js and its migrations: connection settings, every table with its columns,
 // constraints and indexes, and migrations that are idempotent, ordered, transactional and refuse a newer database.
 import assert from 'node:assert/strict';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
@@ -14,7 +14,7 @@ import { listMigrations, listTables, migrate, MIGRATIONS_DIR, open, schemaVersio
 /** Columns, in order. */
 const COLUMNS = {
   calls: ['id', 'event_id', 'modem_id', 'uniqueid', 'caller', 'did', 'dialstatus', 'answered_sec', 'dialed_sec', 'disposition',
-    'hangupcause', 'outcome', 'ended_at'],
+    'hangupcause', 'outcome', 'ended_at', 'direction'],
   devices_seen: ['usb_port', 'vendor', 'product', 'imei', 'imsi', 'data_tty', 'first_seen', 'last_seen', 'present'],
   events: ['id', 'kind', 'modem_id', 'uniqueid', 'emitted_at', 'received_at', 'fields_json'],
   messages: ['id', 'event_id', 'modem_id', 'sender', 'text', 'scts', 'received_at'],
@@ -101,15 +101,15 @@ test('open() names the database path when the file cannot be opened', () => {
 
 test('migrate() on a new database creates every table with its columns as STRICT tables and sets the schema version', () => {
   const db = fresh();
-  assert.deepEqual(migrate(db), { from: 0, to: 2, applied: [1, 2] });
+  assert.deepEqual(migrate(db), { from: 0, to: 3, applied: [1, 2, 3] });
   assert.deepEqual(listTables(db), TABLES);
   for (const [table, columns] of Object.entries(COLUMNS)) {
     assert.deepEqual(all(db, 'SELECT name FROM pragma_table_info(?) ORDER BY cid', table).map((row) => row.name), columns, table);
   }
   const strict = all(db, "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND strict = 1 ORDER BY name");
   assert.deepEqual(strict.map((row) => row.name).filter((name) => !String(name).startsWith('sqlite_')), TABLES);
-  assert.equal(schemaVersion(db), 2);
-  assert.deepEqual({ ...db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").get() }, { value: '2' });
+  assert.equal(schemaVersion(db), 3);
+  assert.deepEqual({ ...db.prepare("SELECT value FROM settings WHERE key = 'schema_version'").get() }, { value: '3' });
 });
 
 test('migrate() twice is idempotent, on the same connection and on a new one', () => {
@@ -120,11 +120,11 @@ test('migrate() twice is idempotent, on the same connection and on a new one', (
   opened.push(first);
   migrate(first);
   const before = schema(first);
-  assert.deepEqual(migrate(first), { from: 2, to: 2, applied: [] });
+  assert.deepEqual(migrate(first), { from: 3, to: 3, applied: [] });
   first.close();
   const second = open(path);
   opened.push(second);
-  assert.deepEqual(migrate(second), { from: 2, to: 2, applied: [] });
+  assert.deepEqual(migrate(second), { from: 3, to: 3, applied: [] });
   assert.deepEqual(schema(second), before);
   assert.deepEqual(listTables(second), TABLES);
 });
@@ -240,7 +240,7 @@ test('002 moves a stored forwarding verdict into modem_forwarding and drops mode
     JSON.stringify({ listed: true, forwarding: null }));
   run(db, "INSERT INTO modem_state (modem_id, state, observed_at) VALUES ('gsm3', 'ready', 1700000000002)");
 
-  assert.deepEqual(migrate(db), { from: 1, to: 2, applied: [2] });
+  assert.deepEqual(migrate(db), { from: 1, to: 3, applied: [2, 3] });
   assert.deepEqual(listTables(db), TABLES, 'modem_state is gone, modem_forwarding is there');
   const rows = all(db, 'SELECT modem_id, forwarding_json, observed_at FROM modem_forwarding ORDER BY modem_id');
   assert.equal(rows.length, 1, 'only the modem that had a verdict; a null one and a missing detail carry nothing');
@@ -249,19 +249,32 @@ test('002 moves a stored forwarding verdict into modem_forwarding and drops mode
   assert.deepEqual(JSON.parse(String(rows[0]?.forwarding_json)), verdict);
 });
 
+test('003 marks every call recorded before it as incoming and allows only in and out', () => {
+  const db = fresh();
+  const before = migrationsDir('v2', { '002.sql': readFileSync(join(MIGRATIONS_DIR, '002.sql'), 'utf8') });
+  assert.deepEqual(migrate(db, { dir: before }), { from: 0, to: 2, applied: [1, 2] });
+  run(db, "INSERT INTO events (id, kind, modem_id, emitted_at, received_at, fields_json) VALUES ('e1', 'call-end', 'gsm1', 1, 1, '{}')");
+  run(db, "INSERT INTO calls (event_id, modem_id, uniqueid, ended_at) VALUES ('e1', 'gsm1', '1757.1', 1)");
+  assert.deepEqual(migrate(db), { from: 2, to: 3, applied: [3] });
+  assert.deepEqual(all(db, 'SELECT uniqueid, direction FROM calls').map((row) => ({ ...row })), [{ uniqueid: '1757.1', direction: 'in' }]);
+  run(db, "INSERT INTO events (id, kind, modem_id, emitted_at, received_at, fields_json) VALUES ('e2', 'call-end', 'gsm1', 2, 2, '{}')");
+  assert.throws(() => run(db, "INSERT INTO calls (event_id, modem_id, uniqueid, ended_at, direction) VALUES ('e2', 'gsm1', '1757.2', 2, 'both')"),
+    { message: /^CHECK constraint failed: direction IN \('in', 'out'\)$/ });
+});
+
 test('a database newer than this build, or with a garbled schema_version, is refused', () => {
   const db = fresh();
   migrate(db);
   run(db, "UPDATE settings SET value = '7' WHERE key = 'schema_version'");
   assert.throws(() => migrate(db), {
-    message: 'database schema_version 7 is newer than this controller (latest migration 2); refusing to use it',
+    message: 'database schema_version 7 is newer than this controller (latest migration 3); refusing to use it',
   });
   run(db, "UPDATE settings SET value = '01' WHERE key = 'schema_version'");
   assert.throws(() => migrate(db), { message: 'settings.schema_version is not a version number: 01' });
 });
 
 test('migration files must be named NNN.sql and numbered from 001 without gaps', () => {
-  assert.deepEqual(listMigrations().map((m) => m.version), [1, 2]);
+  assert.deepEqual(listMigrations().map((m) => m.version), [1, 2, 3]);
   const gap = migrationsDir('gap', { '003.sql': '' });
   assert.throws(() => listMigrations(gap), { message: `migrations in ${gap} must be numbered 001..002 without gaps; found ${join(gap, '003.sql')}` });
   const badName = migrationsDir('bad-name', { '2.sql': '' });

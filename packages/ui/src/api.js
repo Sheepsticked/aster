@@ -146,6 +146,8 @@ export const api = {
   messages: (filters) => get(`/messages${query(filters)}`),
   /** @param {Record<string, unknown>} [filters] */
   calls: (filters) => get(`/calls${query(filters)}`),
+  /** Answered calls and their talk time per modem and direction, of the calls that ended in [since, until). @param {{ since: number, until?: number }} range */
+  callsSummary: (range) => get(`/calls/summary${query(range)}`),
   /** @param {Record<string, unknown>} [filters] */
   notifications: (filters) => get(`/notifications${query(filters)}`),
   /** @param {Record<string, unknown>} [filters] */

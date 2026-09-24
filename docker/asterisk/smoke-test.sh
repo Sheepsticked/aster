@@ -317,7 +317,7 @@ check_eq "the entrypoint made events/ in the empty spool: the asterisk user's, m
 
 hostile='`id`;$(id)'
 if originate call; then
-  check_eq "call-end: 13 TAB-separated fields" "$(nfields)" 13
+  check_eq "call-end: 14 TAB-separated fields, an incoming call's direction empty" "$(nfields) $(field 14)" "14 -"
   check_eq "call-end: kind and modem" "$(field 2) $(field 4)" "call-end gsm_test"
   check_match "call-end: uniqueid is the channel's UNIQUEID" "$(field 6)" '^[0-9]+\.[0-9]+$'
   check_eq "call-end: hostile CALLERID reaches the spool only as base64(x + value)" "$(field 7)" "$(b64x "$hostile")"
@@ -333,6 +333,18 @@ fi
 if originate did; then
   check_eq "call-end (DID): caller" "$(unb64 "$(field 7)")" x+375290000001
   check_eq "call-end (DID): DID taken from the _[+0-9]. extension" "$(unb64 "$(field 8)")" x+1234567890
+fi
+if originate out; then
+  check_eq "call-end (outgoing): the direction last" "$(nfields) $(field 14)" "14 out"
+  check_eq "call-end (outgoing): modem, caller (the phone) and the number dialed" \
+    "$(field 4) $(unb64 "$(field 7)") $(unb64 "$(field 8)")" "gsm_test x599 x+1234567890"
+  info "call-end (outgoing): DIALSTATUS=$(unb64 "$(field 9)") HANGUPCAUSE=$(unb64 "$(field 12)") (x = sentinel)"
+fi
+if originate in-out; then
+  check_eq "an incoming call sent on through aster-out keeps its own record: no direction, no number dialed" \
+    "$(field 14) $(unb64 "$(field 8)")" "- x"
+  sleep 2
+  check_eq "... and gets no second record" "$(count_evt)" "$((before + 1))"
 fi
 sender='";touch /tmp/aster-smoke-pwned;"'
 if originate sms; then
@@ -354,7 +366,7 @@ if x test -e /tmp/aster-smoke-pwned; then
 else
   pass "no shell command from caller id or sender text was executed"
 fi
-check_eq "spool: four event files" "$(count_evt)" 4
+check_eq "spool: six event files" "$(count_evt)" 6
 check_eq "spool: no .tmp or other file left" "$(x sh -c 'ls -A "$1" | grep -vc "\.evt$"' sh "$spool" || true)" 0
 check_eq "spool: event files are mode 644" "$(x sh -c 'stat -c %a "$1"/*.evt | sort -u' sh "$spool")" 644
 # The ring groups' b() handler on a real channel: JITTERBUFFER() is registered (func_jitterbuffer) and takes the global's kind;
@@ -367,8 +379,9 @@ until docker logs "$c" 2>&1 | grep -aq 'smoke jb: the handler set JITTERBUFFER(a
 done
 check_match "aster-jitterbuffer runs on a channel: JITTERBUFFER(adaptive) set, handler returned" "$(docker logs "$c" 2>&1)" \
   'NOTICE\[.*smoke jb: the handler set JITTERBUFFER\(adaptive\) and returned'
-# Dialing the ring member 599, which never registers in a container, logs these two ERROR lines per call.
-ring_errors="Endpoint '599': Could not create dialog to invalid URI '599'|Failed to create outgoing session to endpoint '599'"
+# Dialing the ring member 599, which never registers in a container, logs these two ERROR lines per call; an outgoing call
+# on gsm_test, which has no modem, logs the WARNING line.
+ring_errors="Endpoint '599': Could not create dialog to invalid URI '599'|Failed to create outgoing session to endpoint '599'|\[gsm_test\] Request to call on device which can not make call at this moment"
 check_log "log after the dialplan cases: no ERROR/WARNING except the unregistered ring member" "$ring_errors"
 if [ -n "${SMOKE_SPOOL_OUT:-}" ]; then
   mkdir -p "$SMOKE_SPOOL_OUT"
