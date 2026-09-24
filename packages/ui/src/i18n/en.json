@@ -319,6 +319,7 @@
   "list.search": "Search",
   "list.range": "{first}–{last} of {total}",
   "list.previous": "Previous",
+  "list.per_page": "Rows per page",
   "list.next": "Next",
 
   "messages.title": "Messages",

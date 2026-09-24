@@ -156,6 +156,10 @@ export const calls = () => [
     answered_sec: 0, dialed_sec: 25, disposition: 'NO ANSWER', hangupcause: 19, outcome: 'missed', ended_at: Date.now() - 50 * MINUTE },
   { id: 5, modem_id: 'gsm1', uniqueid: '1789200000.5', direction: 'in', caller: '', did: '+375291111111', dialstatus: 'CONGESTION',
     answered_sec: 0, dialed_sec: 0, disposition: 'FAILED', hangupcause: 34, outcome: 'failed', ended_at: Date.now() - 5 * HOUR },
+  // Older calls, so the list has more than one page; months back, so this and last month's talk time leave them out.
+  ...Array.from({ length: 30 }, (_, i) => ({ id: 100 + i, modem_id: 'gsm2', uniqueid: `1789100000.${i}`, direction: 'in',
+    caller: `+12345600${String(i).padStart(2, '0')}`, did: null, dialstatus: 'ANSWER', answered_sec: 60, dialed_sec: 70,
+    disposition: 'ANSWERED', hangupcause: 16, outcome: 'answered', ended_at: Date.now() - (100 + i) * 24 * HOUR })),
 ];
 
 /** Notification rows as `GET /api/notifications` returns them. */

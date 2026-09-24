@@ -1,7 +1,7 @@
 // @ts-check
 // Aster controller — paging and filtering for the list routes. Query strings are not coerced, so numbers are parsed here.
 // `q` is a plain substring (not a LIKE pattern), matched by our own SQL function because SQLite's lower() folds ASCII only.
-export const PER_PAGE = 50;
+export const PER_PAGE = 25;
 export const MAX_PER_PAGE = 200;
 /** A `q` longer than this is refused: a substring search over the whole table is the one part of a list query that is not indexed. */
 export const MAX_Q = 200;

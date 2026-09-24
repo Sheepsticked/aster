@@ -319,6 +319,7 @@
   "list.search": "Поиск",
   "list.range": "{first}–{last} из {total}",
   "list.previous": "Назад",
+  "list.per_page": "Строк на странице",
   "list.next": "Вперёд",
 
   "messages.title": "Сообщения",

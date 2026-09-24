@@ -14,6 +14,7 @@
   import { messageOf } from '../lib/errors.js';
   import { dateTime } from '../lib/format.js';
   import { live } from '../lib/live.svelte.js';
+  import { perPage } from '../lib/perPage.svelte.js';
   import { toasts } from '../lib/toasts.svelte.js';
 
   /** The outcomes (calls/outcome.js) and the tone each one is shown with. */
@@ -50,7 +51,7 @@
   async function load() {
     loading = true;
     try {
-      data = await api.calls({ page, ...filters });
+      data = await api.calls({ page, per_page: perPage.value, ...filters });
       error = null;
     } catch (err) {
       error = messageOf(err);
@@ -82,6 +83,7 @@
     void live.resume;
     void live.finished;
     void page;
+    void perPage.value;
     void filters.modem;
     void filters.direction;
     void filters.outcome;

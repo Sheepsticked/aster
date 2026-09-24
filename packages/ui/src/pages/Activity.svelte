@@ -14,6 +14,7 @@
   import { messageOf } from '../lib/errors.js';
   import { dateTime } from '../lib/format.js';
   import { live } from '../lib/live.svelte.js';
+  import { perPage } from '../lib/perPage.svelte.js';
 
   /** The operation statuses and the notification statuses, with the tone each is shown with. */
   const OP_TONE = Object.freeze(/** @type {Record<string, 'ok' | 'info' | 'warn' | 'bad' | 'neutral'>} */ ({
@@ -45,8 +46,8 @@
     loading = true;
     try {
       data = tab === 'operations'
-        ? await api.operations({ page, modem: ops.modem, status: ops.status, actor: ops.actor, q: ops.q })
-        : await api.notifications({ page, status: notes.status, kind: notes.kind, q: notes.q });
+        ? await api.operations({ page, per_page: perPage.value, modem: ops.modem, status: ops.status, actor: ops.actor, q: ops.q })
+        : await api.notifications({ page, per_page: perPage.value, status: notes.status, kind: notes.kind, q: notes.q });
       error = null;
     } catch (err) {
       error = messageOf(err);
@@ -60,6 +61,7 @@
     void live.finished;
     void tab;
     void page;
+    void perPage.value;
     void ops.modem;
     void ops.status;
     void ops.actor;

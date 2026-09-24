@@ -148,7 +148,7 @@ function atAnswer(id, command) {
  */
 function listPage(rows, query, { eq = {}, search = [] } = {}) {
   const items = filtered(rows, query, { eq, search });
-  const per_page = Math.min(200, Math.max(1, Number(query.get('per_page') ?? '50') || 50));
+  const per_page = Math.min(200, Math.max(1, Number(query.get('per_page') ?? '25') || 25));
   const page = Math.max(1, Number(query.get('page') ?? '1') || 1);
   const total = items.length;
   return json({

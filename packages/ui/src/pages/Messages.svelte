@@ -17,6 +17,7 @@
   import { dateTime } from '../lib/format.js';
   import { health } from '../lib/health.svelte.js';
   import { live } from '../lib/live.svelte.js';
+  import { perPage } from '../lib/perPage.svelte.js';
   import { segments } from '../lib/sms.js';
   import { toasts } from '../lib/toasts.svelte.js';
 
@@ -71,7 +72,7 @@
   async function load() {
     loading = true;
     try {
-      data = await api.messages({ page, ...listFilters() });
+      data = await api.messages({ page, per_page: perPage.value, ...listFilters() });
       error = null;
     } catch (err) {
       error = messageOf(err);
@@ -92,6 +93,7 @@
     void live.resume;
     void live.finished;
     void page;
+    void perPage.value;
     void direction;
     void filters.modem;
     void filters.status;

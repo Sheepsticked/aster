@@ -40,7 +40,7 @@ describe('http history routes', () => {
       const get = async (query) => (await h.app.inject({ method: 'GET', url: `/api/messages${query}`, headers: { cookie } })).json();
 
       const all = await get('');
-      assert.deepEqual([all.total, all.page, all.per_page, all.pages], [5, 1, 50, 1]);
+      assert.deepEqual([all.total, all.page, all.per_page, all.pages], [5, 1, PER_PAGE, 1]);
       assert.deepEqual(all.items.map((/** @type {any} */ item) => [item.direction, item.at]),
         [['out', T + 40], ['in', T + 30], ['in', T + 20], ['in', T + 10], ['out', T + 5]]);
       assert.deepEqual(all.items[0], { direction: 'out', id: 1, modem_id: 'gsm1', number: '+375290000003', text: 'sent to three',

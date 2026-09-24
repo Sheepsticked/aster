@@ -858,6 +858,23 @@ test.describe('the calls page', () => {
     await page.screenshot({ path: `test-results/screens/${info.project.name}-calls-talk.png`, fullPage: true });
   });
 
+  test('shows 25 calls a page, pages on, and keeps a rows-per-page choice after a reload', async ({ page }, info) => {
+    const list = page.locator('#calls-list');
+    const range = (/** @type {number} */ first, /** @type {number} */ last) =>
+      ru['list.range'].replace('{first}', String(first)).replace('{last}', String(last)).replace('{total}', '35');
+    const press = async (/** @type {import('@playwright/test').Locator} */ button) => (info.project.use.isMobile ? button.tap() : button.click());
+    await expect(list.getByText(range(1, 25))).toBeVisible();
+    await press(list.getByRole('button', { name: ru['list.next'] }));
+    await expect(list.getByText(range(26, 35))).toBeVisible();
+
+    await list.getByLabel(ru['list.per_page']).selectOption('50');
+    await expect(list.getByText(range(1, 35))).toBeVisible();
+    await expect(list.getByRole('button', { name: ru['list.next'] })).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('#calls-list').getByText(range(1, 35))).toBeVisible();
+    await expect(page.locator('#calls-list').getByLabel(ru['list.per_page'])).toHaveValue('50');
+  });
+
   test('deletes one call after the confirmation, and with a filter Delete all takes only what the list shows', async ({ page }, info) => {
     const list = page.locator('#calls-list');
     const press = async (/** @type {import('@playwright/test').Locator} */ button) => (info.project.use.isMobile ? button.tap() : button.click());
