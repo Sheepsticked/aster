@@ -839,9 +839,9 @@ test.describe('the calls page', () => {
   test('shows each call\'s direction, filters by it, and adds up the talk time per SIM', async ({ page }, info) => {
     const list = page.locator('#calls-list');
     const row = (/** @type {string} */ text) => list.locator('tr, li').filter({ hasText: text }).filter({ visible: true });
-    await expect(row('+1234567891').getByText(ru['calls.direction_out'])).toBeVisible();
+    await expect(row('+1234567891').getByRole('img', { name: ru['calls.direction_out'] })).toBeVisible();
     await expect(row('+1234567892').getByText(ru['calls.outcome_unanswered'])).toBeVisible();
-    await expect(row('+375447654321').getByText(ru['calls.direction_in'])).toBeVisible();
+    await expect(row('+375447654321').getByRole('img', { name: ru['calls.direction_in'] })).toBeVisible();
 
     const filters = await openSection(page, 'calls-filters');
     await filters.getByLabel(ru['calls.direction']).selectOption('out');

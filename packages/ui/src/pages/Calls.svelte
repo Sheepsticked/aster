@@ -183,7 +183,6 @@
   const items = $derived(data?.items ?? []);
   const columns = $derived([
     { key: 'caller', label: t('calls.caller'), primary: true },
-    { key: 'direction', label: t('calls.direction') },
     { key: 'outcome', label: t('calls.outcome') },
     { key: 'did', label: t('calls.did') },
     { key: 'duration', label: t('calls.duration') },
@@ -272,9 +271,20 @@
   >
     {#snippet cell(/** @type {any} */ call, /** @type {{ key: string }} */ column)}
       {#if column.key === 'caller'}
-        <span class="tabular-nums">{call.caller || t('calls.unknown_caller')}</span>
-      {:else if column.key === 'direction'}
-        {t(call.direction === 'out' ? 'calls.direction_out' : 'calls.direction_in')}
+        {@const direction = t(call.direction === 'out' ? 'calls.direction_out' : 'calls.direction_in')}
+        <!-- The direction as an arrow, as phones show it, so the table needs no column of its own. -->
+        <span class="inline-flex items-center gap-1.5">
+          <svg class="h-4 w-4 shrink-0 text-slate-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round" role="img" aria-label={direction}>
+            <title>{direction}</title>
+            {#if call.direction === 'out'}
+              <path d="M7 17 17 7M9 7h8v8" />
+            {:else}
+              <path d="M17 7 7 17M15 17H7V9" />
+            {/if}
+          </svg>
+          <span class="tabular-nums">{call.caller || t('calls.unknown_caller')}</span>
+        </span>
       {:else if column.key === 'outcome'}
         <StatusBadge
           text={t(`calls.outcome_${call.outcome}`)}
