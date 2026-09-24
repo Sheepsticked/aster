@@ -47,6 +47,9 @@
   /** @type {string | null} */
   let passwordProblem = $state(null);
 
+  /** The retention_days fields, in the order the form shows them. */
+  const RETENTION = /** @type {const} */ (['messages', 'calls', 'operations', 'notifications']);
+
   /** IANA zones known to the browser; free text if unsupported. */
   const zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
 
@@ -54,6 +57,8 @@
   const editable = (data) => ({
     ui_language: data.ui_language,
     timezone: data.timezone,
+    messages: String(data.retention_days?.messages ?? ''),
+    calls: String(data.retention_days?.calls ?? ''),
     operations: String(data.retention_days?.operations ?? ''),
     notifications: String(data.retention_days?.notifications ?? ''),
     default_recipients: [...(data.default_recipients ?? [])],
@@ -86,7 +91,7 @@
     if (form.timezone.trim() !== settings.timezone) out.timezone = form.timezone.trim();
     /** @type {Record<string, number>} */
     const retention = {};
-    for (const key of /** @type {const} */ (['operations', 'notifications'])) {
+    for (const key of RETENTION) {
       const value = Number(form[key]);
       if (Number.isInteger(value) && value !== settings.retention_days?.[key]) retention[key] = value;
     }
@@ -103,7 +108,7 @@
     const found = [];
     if (form === null) return found;
     if (form.timezone.trim() === '') found.push({ path: 'timezone', message: t('settings.timezone_empty') });
-    for (const key of /** @type {const} */ (['operations', 'notifications'])) {
+    for (const key of RETENTION) {
       const value = Number(form[key]);
       if (!Number.isInteger(value) || value < 1 || value > 3650) found.push({ path: key, message: t('settings.retention_invalid') });
     }
@@ -277,6 +282,16 @@
 
       <Section id="settings-retention" title={t('settings.retention')} subtitle={t('settings.retention_hint')}>
         <div class="flex flex-col gap-4">
+          <Field id="settings-retention-messages" label={t('settings.retention_messages')} problems={problemsFor(problems, 'messages')}>
+            {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+              <input id="settings-retention-messages" class="input tabular-nums" bind:value={form.messages} inputmode="numeric" aria-describedby={field.describedBy} />
+            {/snippet}
+          </Field>
+          <Field id="settings-retention-calls" label={t('settings.retention_calls')} problems={problemsFor(problems, 'calls')}>
+            {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+              <input id="settings-retention-calls" class="input tabular-nums" bind:value={form.calls} inputmode="numeric" aria-describedby={field.describedBy} />
+            {/snippet}
+          </Field>
           <Field id="settings-retention-operations" label={t('settings.retention_operations')} problems={problemsFor(problems, 'operations')}>
             {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
               <input id="settings-retention-operations" class="input tabular-nums" bind:value={form.operations} inputmode="numeric" aria-describedby={field.describedBy} />

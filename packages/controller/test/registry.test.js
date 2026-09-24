@@ -35,7 +35,7 @@ const phone = (number, outbound, directMedia = false) => ({ number, label: null,
 /** The example after defaults. */
 const TWO_MODEMS = {
   version: 1,
-  settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 90 } },
+  settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
   telegram: { default_recipients: ['111222333'], alerts: false },
   modems: [
     { id: 'gsm1', driver: 'quectel', imei: '490154203237534', enabled: true, uac: true, usb_port: '1-1.3',
@@ -99,7 +99,7 @@ describe('registry', () => {
       const { registry, flags } = load(fixture('valid-minimal.yaml'));
       assert.deepEqual(registry, {
         version: 1,
-        settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90 } },
+        settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
         telegram: { default_recipients: [], alerts: false },
         modems: [{ id: 'gsm1', driver: 'dongle', imei: '490154203237542', enabled: true, uac: false, usb_port: null, ring: [], ring_timeout: 120,
           incoming_context: null, group: null, recipients: null, ports: null }],
@@ -111,7 +111,7 @@ describe('registry', () => {
       assert.equal(DEFAULTS.phone.direct_media, false);
       assert.equal(DEFAULTS.modem.recipients, null);
       assert.equal(DEFAULTS.modem.incoming_context, null);
-      assert.deepEqual(DEFAULTS.settings.retention_days, { operations: 90, notifications: 90 });
+      assert.deepEqual(DEFAULTS.settings.retention_days, { operations: 90, notifications: 90, messages: 180, calls: 180 });
       assert.equal(DEFAULTS.telegram.alerts, false);
     });
 
@@ -161,7 +161,7 @@ describe('registry', () => {
       }));
       assert.deepEqual(registry, {
         version: 1,
-        settings: { ui_language: 'en', timezone: 'Europe/Minsk', retention_days: { operations: 90, notifications: 90 } },
+        settings: { ui_language: 'en', timezone: 'Europe/Minsk', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
         telegram: { default_recipients: [], alerts: false },
         modems: [],
         phones,
@@ -324,13 +324,14 @@ describe('registry', () => {
         ['modems[1].ports.data', 'must be a device path under /dev/ (got "/dev/../etc/passwd")'],
       ]],
       ['whole numbers and booleans', (r) => {
-        r.settings = { retention_days: { operations: 0.5 } };
+        r.settings = { retention_days: { operations: 0.5, calls: 0 } };
         r.modems[0].enabled = 'yes';
         r.modems[0].ring_timeout = 0;
         r.modems[1].group = -1;
         r.phones[2].direct_media = 'true';
       }, [
         ['settings.retention_days.operations', 'must be a whole number of days from 1 to 36500 (got number 0.5)'],
+        ['settings.retention_days.calls', 'must be a whole number of days from 1 to 36500 (got number 0)'],
         ['modems[0].enabled', 'must be true or false (got "yes")'],
         ['modems[0].ring_timeout', 'must be a whole number of seconds from 1 to 3600 (got number 0)'],
         ['modems[1].group', 'must be null or a whole number from 0 to 2147483647 (got number -1)'],
@@ -357,7 +358,7 @@ describe('registry', () => {
 
     test('values the rules accept', () => {
       const input = base();
-      input.settings = { ui_language: 'en', timezone: 'America/Argentina/Buenos_Aires', retention_days: { operations: 1, notifications: 36500 } };
+      input.settings = { ui_language: 'en', timezone: 'America/Argentina/Buenos_Aires', retention_days: { operations: 1, notifications: 36500, messages: 1, calls: 36500 } };
       input.telegram = { default_recipients: ['-1001234567890', '111222333'], alerts: true };
       Object.assign(input.modems[0], { ring_timeout: 3600, incoming_context: 'from-trunk.custom_1', group: 0, recipients: [] });
       Object.assign(input.modems[1], { usb_port: '3-1.2.4', ports: { data: '/dev/serial/by-path/platform-xhci-hcd.0-usb-0:1.3:1.2-port0',
@@ -444,7 +445,7 @@ describe('registry', () => {
         'settings:',
         '  ui_language: "en"',
         '  timezone: "UTC"',
-        '  retention_days: { operations: 90, notifications: 90 }',
+        '  retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 }',
         'telegram:',
         '  default_recipients: []',
         '  alerts: false',

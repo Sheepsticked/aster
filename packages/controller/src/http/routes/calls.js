@@ -2,12 +2,11 @@
 // Aster controller — GET /api/calls: ended calls with their outcome, newest first, filtered like the Calls page.
 // DELETE /api/calls/:id and POST /api/calls/purge delete calls together with their spool events.
 import { transaction } from '../../store/db.js';
+import { ORPHAN_CALL_EVENTS } from '../../store/orphans.js';
 import { byId, calls as schema, callsPurge } from '../schemas/history.js';
 import { offset, page, paging, where } from '../page.js';
 
 const COLUMNS = `id, modem_id, uniqueid, caller, did, dialstatus, answered_sec, dialed_sec, disposition, hangupcause, outcome, ended_at`;
-/** Every call-end event's uniqueid has a calls row until that row is deleted (a repeated call-end adds none). */
-const ORPHAN_EVENTS = "DELETE FROM events WHERE kind = 'call-end' AND uniqueid NOT IN (SELECT uniqueid FROM calls)";
 
 /** @param {{ modem?: string, outcome?: string, q: string | null, before?: number }} filters */
 function filter({ modem, outcome, q, before }) {
@@ -37,7 +36,7 @@ export function callRoutes(app, ctx) {
   /** Deletes the calls a WHERE selects, with their events. @param {ReturnType<typeof where>} w */
   const remove = (w) => transaction(ctx.db, () => {
     const changes = Number(ctx.db.prepare(`DELETE FROM calls ${w.sql}`).run(...w.params).changes);
-    if (changes > 0) ctx.db.prepare(ORPHAN_EVENTS).run();
+    if (changes > 0) ctx.db.prepare(ORPHAN_CALL_EVENTS).run();
     return changes;
   });
 

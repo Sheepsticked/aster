@@ -35,7 +35,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
 /**
  * @typedef {object} Registry
  * @property {1} version
- * @property {{ ui_language: 'ru' | 'en', timezone: string, retention_days: { operations: number, notifications: number } }} settings
+ * @property {{ ui_language: 'ru' | 'en', timezone: string, retention_days: { operations: number, notifications: number, messages: number, calls: number } }} settings
  * @property {{ default_recipients: readonly string[], alerts: boolean }} telegram
  * @property {readonly Modem[]} modems
  * @property {readonly Phone[]} phones
@@ -45,7 +45,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
 const KEYS = {
   top: ['version', 'settings', 'telegram', 'modems', 'phones'],
   settings: ['ui_language', 'timezone', 'retention_days'],
-  retention: ['operations', 'notifications'],
+  retention: ['operations', 'notifications', 'messages', 'calls'],
   telegram: ['default_recipients', 'alerts'],
   modem: ['id', 'driver', 'imei', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports'],
   ports: ['data', 'audio'],
@@ -60,7 +60,7 @@ const DROPPED = { modem: ['label'] };
  *   modem: Omit<Modem, 'id' | 'driver' | 'imei' | 'enabled'>, phone: Omit<Phone, 'number' | 'secret'> }>}
  */
 export const DEFAULTS = deepFreeze({
-  settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90 } },
+  settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
   telegram: { default_recipients: [], alerts: false },
   modem: { uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, ports: null },
   phone: { label: null, outbound: null, context: null, direct_media: false },
@@ -429,7 +429,7 @@ function normalize(c, input) {
     settings.timezone = c.field(rawSettings, 'timezone', 'settings', settings.timezone, isTimezone, 'must be an IANA time zone such as Europe/Istanbul');
     const days = rawSettings.retention_days;
     if (Object.hasOwn(rawSettings, 'retention_days') && c.mapping(days, 'settings.retention_days', KEYS.retention)) {
-      for (const key of /** @type {const} */ (['operations', 'notifications'])) {
+      for (const key of /** @type {const} */ (['operations', 'notifications', 'messages', 'calls'])) {
         settings.retention_days[key] = c.field(days, key, 'settings.retention_days', settings.retention_days[key], integer(1, 36500),
           'must be a whole number of days from 1 to 36500');
       }

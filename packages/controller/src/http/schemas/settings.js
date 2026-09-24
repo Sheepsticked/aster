@@ -20,6 +20,8 @@ export const update = ({
         properties: {
           operations: { type: 'integer', minimum: 1, maximum: 3650 },
           notifications: { type: 'integer', minimum: 1, maximum: 3650 },
+          messages: { type: 'integer', minimum: 1, maximum: 3650 },
+          calls: { type: 'integer', minimum: 1, maximum: 3650 },
         },
       },
       default_recipients: { type: 'array', maxItems: 32, items: CHAT_ID },

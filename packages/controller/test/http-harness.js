@@ -28,7 +28,7 @@ export const PHONE = Object.freeze({ number: '596', label: 'Desk', secret: 'sip-
 /** A registry with one modem and one phone, enough for the overview. */
 export const REGISTRY = Object.freeze({
   version: 1,
-  settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 45 } }, // not the defaults, so a patch that drops a field shows
+  settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 45, messages: 200, calls: 365 } }, // not the defaults, so a patch that drops a field shows
   telegram: { default_recipients: ['100200300'], alerts: false },
   modems: [MODEM],
   phones: [PHONE],

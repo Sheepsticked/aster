@@ -355,7 +355,7 @@ export function importOld(files) {
   return {
     registry: {
       version: 1,
-      settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90 } },
+      settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
       telegram: { default_recipients: first, alerts: false },
       modems,
       phones: sip.phones,

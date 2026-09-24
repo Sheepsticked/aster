@@ -4,7 +4,7 @@ version: 1
 settings:
   ui_language: en              # en | ru
   timezone: Europe/Minsk       # display only
-  retention_days: { operations: 90, notifications: 90 }
+  retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 }
 telegram:
   default_recipients: []       # Telegram chat ids as strings, e.g. ["111222333"]; the bot token lives in secrets.env
   alerts: false                # opt-in: modem down > 5 min / Asterisk unreachable > 2 min

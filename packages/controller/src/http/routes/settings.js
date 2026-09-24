@@ -17,7 +17,7 @@ export const DEFAULTS = Object.freeze(/** @type {Readonly<{ applyWaitMs: number 
  * @typedef {object} SettingsUpdate
  * @property {'ru' | 'en'} [ui_language]
  * @property {string} [timezone]
- * @property {{ operations?: number, notifications?: number }} [retention_days]
+ * @property {{ operations?: number, notifications?: number, messages?: number, calls?: number }} [retention_days]
  * @property {string[]} [default_recipients]
  * @property {boolean} [alerts]
  * @property {string | null} [telegram_token]

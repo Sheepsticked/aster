@@ -55,7 +55,8 @@ it decided — the port, and which images the appliance runs — it writes to `.
 - **Inbound calls.** A call to a SIM rings the phones you picked for it. Ring groups are a list of checkboxes.
 - **Outbound calls.** Each phone dials out through the modem you assign it.
 - **SMS.** Incoming messages appear in the UI and in Telegram. You can send from the UI, with delivery reports and
-  retry, and delete one SMS or the whole list (calls too).
+  retry, and delete one SMS or the whole list (calls too). SMS and calls older than 180 days are deleted
+  automatically; Settings changes how long they are kept.
 - **Missed-call alerts.** A Telegram message with the caller's number and the time.
 - **Modem control.** Start, stop, reset, check signal. Call forwarding (always, or when busy, unanswered or unreachable)
   and USSD codes and menus (balance, top-ups) without a terminal. A raw AT console when you need one.

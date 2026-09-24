@@ -3,6 +3,7 @@
 // DELETE /api/messages/in/:id and POST /api/messages/purge delete SMS (not ones still being sent) with their spool events.
 import { REMOVABLE } from '../../sms/outbox.js';
 import { transaction } from '../../store/db.js';
+import { ORPHAN_SMS_EVENTS } from '../../store/orphans.js';
 import { byId, messages as schema, messagesPurge } from '../schemas/history.js';
 import { offset, page, paging, where } from '../page.js';
 
@@ -12,8 +13,6 @@ const INBOX = `SELECT 'in' AS direction, id, modem_id, sender AS number, text, N
   received_at AS updated_at, NULL AS attempt_no, NULL AS last_error, scts FROM messages`;
 const OUTBOX = `SELECT 'out' AS direction, id, modem_id, number, text, status, created_at AS at,
   updated_at, attempt_no, last_error, NULL AS scts FROM sms_outbox`;
-/** Every sms event has a messages row until that row is deleted. */
-const ORPHAN_EVENTS = "DELETE FROM events WHERE kind = 'sms' AND id NOT IN (SELECT event_id FROM messages)";
 
 /**
  * The WHERE of one half of the list.
@@ -65,7 +64,7 @@ export function messageRoutes(app, ctx) {
     const id = Number(/** @type {any} */ (request.params).id);
     const deleted = transaction(ctx.db, () => {
       const changes = Number(ctx.db.prepare('DELETE FROM messages WHERE id = ?').run(id).changes);
-      if (changes > 0) ctx.db.prepare(ORPHAN_EVENTS).run();
+      if (changes > 0) ctx.db.prepare(ORPHAN_SMS_EVENTS).run();
       return changes;
     });
     if (deleted === 0) return reply.code(404).send({ error: `no received SMS ${id}` });
@@ -84,7 +83,7 @@ export function messageRoutes(app, ctx) {
       if (read.inbox) {
         const w = filter('in', filters);
         received = Number(ctx.db.prepare(`DELETE FROM messages ${w.sql}`).run(...w.params).changes);
-        if (received > 0) ctx.db.prepare(ORPHAN_EVENTS).run();
+        if (received > 0) ctx.db.prepare(ORPHAN_SMS_EVENTS).run();
       }
       if (read.outbox) {
         const w = filter('out', filters);

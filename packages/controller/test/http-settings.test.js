@@ -17,7 +17,7 @@ describe('http settings routes', () => {
       assert.deepEqual(body, {
         ui_language: 'ru',
         timezone: 'Europe/Istanbul',
-        retention_days: { operations: 90, notifications: 45 },
+        retention_days: { operations: 90, notifications: 45, messages: 200, calls: 365 },
         default_recipients: ['100200300'],
         alerts: false,
         telegram_token_set: true,
@@ -47,7 +47,7 @@ describe('http settings routes', () => {
       const { cookie } = await h.login();
       const before = h.onDisk().hash;
       const response = await h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie },
-        payload: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 30 }, default_recipients: ['-100200300', '42'], alerts: true } });
+        payload: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 30, calls: 30 }, default_recipients: ['-100200300', '42'], alerts: true } });
       assert.equal(response.statusCode, 200);
       const body = response.json();
       assert.deepEqual(body.changed, ['ui_language', 'timezone', 'retention_days', 'default_recipients', 'alerts']);
@@ -55,8 +55,8 @@ describe('http settings routes', () => {
       assert.equal(h.applies.length, 1);
       const params = /** @type {any} */ (h.applies[0]);
       assert.deepEqual([params.base_hash, params.force], [before, false]);
-      assert.deepEqual(params.registry.settings, { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 30, notifications: 45 } },
-        'a partial retention_days keeps the other span, which is not the default either');
+      assert.deepEqual(params.registry.settings, { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 30, notifications: 45, messages: 200, calls: 30 } },
+        'a partial retention_days keeps the other spans, which are not the defaults either');
       assert.deepEqual(params.registry.telegram, { default_recipients: ['-100200300', '42'], alerts: true });
       assert.equal(params.registry.modems.length, 1, 'the rest of the registry is carried through unchanged');
       const disk = h.onDisk().registry;
@@ -141,7 +141,7 @@ describe('http settings routes', () => {
       const { cookie, headers } = await h.login();
       const before = { rows: snapshot(h.db), secrets: h.secretsText(), registry: h.onDisk().hash };
       for (const [payload, status] of /** @type {const} */ ([
-        [{}, 400], [{ unknown: 1 }, 400], [{ ui_language: 'de' }, 400], [{ retention_days: { operations: 0 } }, 400],
+        [{}, 400], [{ unknown: 1 }, 400], [{ ui_language: 'de' }, 400], [{ retention_days: { operations: 0 } }, 400], [{ retention_days: { messages: 3651 } }, 400],
         [{ default_recipients: ['not a chat id'] }, 400], [{ alerts: 'yes' }, 400], [{ timezone: 'Mars/Olympus Mons' }, 400],
         [{ password: { current: PASSWORD } }, 400],
       ])) {

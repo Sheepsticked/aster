@@ -626,12 +626,14 @@ test.describe('the settings page', () => {
     const retention = await openSection(page, 'settings-retention');
     await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
     await retention.getByLabel(ru['settings.retention_operations']).fill('60');
+    await retention.getByLabel(ru['settings.retention_messages']).fill('365');
     await page.screenshot({ path: `test-results/screens/${info.project.name}-settings-open.png`, fullPage: true });
     await page.getByRole('button', { name: ru['common.save'], exact: true }).click();
     await expect(page.getByText(ru['settings.saved'])).toBeVisible({ timeout: 15_000 });
     // The settings were read again and the form matches them; the token was not part of the change and is still set.
     await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
     await expect(retention.getByLabel(ru['settings.retention_operations'])).toHaveValue('60');
+    await expect(retention.getByLabel(ru['settings.retention_messages'])).toHaveValue('365');
     await expect(page.getByText(ru['settings.token_set']).first()).toBeVisible();
   });
 

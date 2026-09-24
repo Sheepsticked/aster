@@ -36,7 +36,7 @@ export const health = ({ summary: withSummary = true } = {}) => ({
 export const settings = () => ({
   ui_language: 'ru', // the layout tests use the longer Russian labels
   timezone: 'Europe/Istanbul',
-  retention_days: { operations: 30, notifications: 45 },
+  retention_days: { operations: 30, notifications: 45, messages: 180, calls: 365 },
   default_recipients: ['123456789'],
   alerts: true,
   telegram_token_set: true,
