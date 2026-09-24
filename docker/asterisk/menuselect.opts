@@ -43,6 +43,8 @@
 +res_pjsip_nat
 +res_pjsip_outbound_registration
 +res_pjsip_pubsub
++res_pjsip_mwi                   # voicemail SUBSCRIBEs from phones get a quiet 404 (no mailboxes), not a warning
++res_pjsip_mwi_body_generator
 +res_pjsip_logger
 +res_pjsip_caller_id
 +res_pjsip_rfc3326

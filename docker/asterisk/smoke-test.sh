@@ -110,6 +110,8 @@ check_match "modules used by the generated dialplan Running" "$modules" \
   '^func_channel\.so .* Running ' '^res_musiconhold\.so .* Running ' '^res_clioriginate\.so .* Running ' \
   '^func_jitterbuffer\.so .* Running '
 check_match "app_record for the call audio check Running" "$modules" '^app_record\.so .* Running '
+check_match "MWI handler for phones' voicemail subscriptions Running" "$modules" \
+  '^res_pjsip_mwi\.so .* Running ' '^res_pjsip_mwi_body_generator\.so .* Running '
 if printf '%s\n' "$modules" | grep -q '^res_pjsip_endpoint_identifier_anonymous\.so '; then
   fail "the anonymous PJSIP endpoint identifier is loaded"
 else
