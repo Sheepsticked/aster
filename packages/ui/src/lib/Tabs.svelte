@@ -27,7 +27,7 @@
       aria-selected={tab.id === current}
       aria-controls={panel}
       tabindex={tab.id === current ? 0 : -1}
-      class="btn shrink-0 px-3 text-sm {tab.id === current ? 'bg-slate-900 text-white' : 'btn-plain'}"
+      class="btn shrink-0 px-3 text-sm {tab.id === current ? 'bg-ink text-on-fill' : 'btn-plain'}"
       onclick={() => onselect(tab.id)}
       onkeydown={keys}
     >

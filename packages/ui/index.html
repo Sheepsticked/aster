@@ -5,8 +5,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content" />
-    <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- The browser toolbar takes the colour of the phone's top bar (--color-bar); lib/theme.svelte.js follows a pinned theme. -->
+    <meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: light)" data-theme="light" />
+    <meta name="theme-color" content="#141517" media="(prefers-color-scheme: dark)" data-theme="dark" />
     <meta name="robots" content="noindex" />
     <link rel="icon" type="image/svg+xml" href="/src/assets/favicon.svg" />
     <link rel="apple-touch-icon" href="/src/assets/apple-touch-icon.png" />

@@ -19,7 +19,7 @@
           aria-current={current ? 'page' : undefined}
           onclick={() => onnavigate?.()}
           class="flex min-h-11 items-center gap-3 rounded-lg px-3 text-base transition-colors
-            {current ? 'bg-sky-700 text-white' : 'text-slate-700 hover:bg-slate-200/80'}"
+            {current ? 'bg-accent text-on-fill' : 'text-slate-700 hover:bg-slate-200/80'}"
         >
           <NavIcon name={route.icon ?? ''} />
           <span class="truncate">{t(`nav.${route.name}`)}</span>

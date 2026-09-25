@@ -16,6 +16,13 @@ function stored() {
 function apply(value) {
   if (value === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = value;
+  // Each toolbar colour of index.html applies to its own scheme, or to every one when that theme is pinned.
+  /** @type {NodeListOf<HTMLMetaElement>} */
+  const metas = document.querySelectorAll('meta[name="theme-color"][data-theme]');
+  for (const meta of metas) {
+    const own = meta.dataset.theme;
+    meta.media = value === 'system' ? `(prefers-color-scheme: ${own})` : own === value ? 'all' : 'not all';
+  }
 }
 
 let current = $state(stored());

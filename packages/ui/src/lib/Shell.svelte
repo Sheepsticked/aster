@@ -62,7 +62,7 @@
 {/snippet}
 
 <div class="flex min-h-dvh flex-col md:flex-row">
-  <a href="#content" class="sr-only rounded-lg bg-sky-700 px-4 py-2 text-white focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50">
+  <a href="#content" class="sr-only rounded-lg bg-accent px-4 py-2 text-on-fill focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50">
     {t('app.skip')}
   </a>
 
@@ -81,10 +81,10 @@
   </aside>
 
   <div class="flex min-w-0 flex-1 flex-col">
-    <header class="sticky top-0 z-30 flex items-center gap-1 bg-slate-900 px-2 text-white scheme-light pt-safe md:hidden">
+    <header class="sticky top-0 z-30 flex items-center gap-1 bg-bar px-2 text-on-fill pt-safe md:hidden">
       <button
         type="button"
-        class="btn btn-ghost w-11 px-0 text-white hover:bg-white/10"
+        class="btn btn-ghost w-11 px-0 text-on-fill hover:bg-on-fill/10"
         aria-label={t('nav.open_menu')}
         aria-expanded={drawer}
         onclick={() => (drawer = true)}

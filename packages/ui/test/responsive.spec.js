@@ -170,19 +170,30 @@ test.describe('every route', () => {
 });
 
 /**
- * How light an element's background is, 0 (black) to 1 (white): the colour is painted on a canvas, so any CSS colour syntax works.
+ * An element's colour as sRGB 0-255, painted on a canvas so any CSS colour syntax works.
  * @param {import('@playwright/test').Locator} element
+ * @param {'backgroundColor' | 'color'} [property]
+ * @returns {Promise<number[]>}
  */
-const lightness = (element) => element.evaluate((node) => {
+const rgb = (element, property = 'backgroundColor') => element.evaluate((node, name) => {
   const canvas = document.createElement('canvas');
   canvas.width = 1;
   canvas.height = 1;
   const context = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
-  context.fillStyle = getComputedStyle(node).backgroundColor;
+  context.fillStyle = getComputedStyle(node)[name];
   context.fillRect(0, 0, 1, 1);
-  const [r = 0, g = 0, b = 0] = context.getImageData(0, 0, 1, 1).data;
+  return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
+}, property);
+
+/**
+ * How light an element's colour is, 0 (black) to 1 (white).
+ * @param {import('@playwright/test').Locator} element
+ * @param {'backgroundColor' | 'color'} [property]
+ */
+const lightness = async (element, property) => {
+  const [r = 0, g = 0, b = 0] = await rgb(element, property);
   return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-});
+};
 
 test.describe('the theme', () => {
   test.beforeEach(async ({ page }) => {
@@ -201,22 +212,33 @@ test.describe('the theme', () => {
       await page.getByLabel(ru['theme.label']).filter({ visible: true }).selectOption(value);
       if (info.project.use.isMobile) await page.keyboard.press('Escape');
     };
+    /** The media query of each browser-toolbar colour, light first. */
+    const toolbar = () => page.locator('meta[name="theme-color"]').evaluateAll((metas) => metas.map((meta) => meta.getAttribute('media')));
     await choose('light');
     await expect.poll(() => lightness(body)).toBeGreaterThan(0.8);
+    expect(await toolbar()).toEqual(['all', 'not all']);
     await page.reload();
     await expect(page.getByRole('heading', { name: ru['overview.modems'] })).toBeVisible();
     await expect.poll(() => lightness(body)).toBeGreaterThan(0.8);
     await choose('system');
     await expect.poll(() => lightness(body)).toBeLessThan(0.2);
+    expect(await toolbar()).toEqual(['(prefers-color-scheme: light)', '(prefers-color-scheme: dark)']);
   });
 
-  test('keeps the phone\'s top bar dark in the dark theme too', async ({ page }, info) => {
-    test.skip(!info.project.use.isMobile, 'the top bar is the phone layout');
-    const bar = page.locator('header').first();
-    expect(await lightness(bar)).toBeLessThan(0.2);
-    // Its text stays light, so the bar reads the same in both themes.
-    const title = await bar.locator('h1').evaluate((node) => getComputedStyle(node).color);
-    expect(title).toMatch(/255|oklch\(1 |#fff/);
+  test('is a night palette: near-black neutral greys, dimmed text, dark fills with light text', async ({ page }, info) => {
+    const body = page.locator('body');
+    expect(await lightness(body)).toBeLessThan(0.06);
+    // Text is light but not white.
+    const text = await lightness(body, 'color');
+    expect(text).toBeGreaterThan(0.7);
+    expect(text).toBeLessThan(0.88);
+    // Greys without a blue cast.
+    const [r = 0, g = 0, b = 0] = await rgb(page.locator('.card').first());
+    expect(Math.max(r, g, b) - Math.min(r, g, b)).toBeLessThanOrEqual(6);
+    const bar = info.project.use.isMobile ? page.locator('header').first() : page.locator('aside a[aria-current="page"]');
+    // A light fill would glare; the selected menu item is muted blue, the phone's top bar a dark grey.
+    expect(await lightness(bar)).toBeLessThan(0.4);
+    expect(await lightness(bar, 'color')).toBeGreaterThan(0.7);
   });
 });
 
