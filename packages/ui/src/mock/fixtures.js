@@ -49,6 +49,7 @@ const modem = (fields) => ({
   id: 'gsm1',
   driver: 'quectel',
   imei: '867435040012345',
+  phone_number: null,
   enabled: true,
   uac: true,
   usb_port: '1-1',

@@ -38,9 +38,9 @@ const TWO_MODEMS = {
   settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
   telegram: { default_recipients: ['111222333'], alerts: false },
   modems: [
-    { id: 'gsm1', driver: 'quectel', imei: '490154203237534', enabled: true, uac: true, usb_port: '1-1.3',
+    { id: 'gsm1', driver: 'quectel', imei: '490154203237534', phone_number: null, enabled: true, uac: true, usb_port: '1-1.3',
       ring: ['504', '505', '506', '507', '508'], ring_timeout: 120, incoming_context: null, group: 1, recipients: null, ports: null },
-    { id: 'gsm2', driver: 'dongle', imei: '490154203237542', enabled: true, uac: false, usb_port: null,
+    { id: 'gsm2', driver: 'dongle', imei: '490154203237542', phone_number: null, enabled: true, uac: false, usb_port: null,
       ring: ['511', '512', '513', '514', '515'], ring_timeout: 120, incoming_context: null, group: 2, recipients: null, ports: null },
   ],
   phones: [
@@ -101,7 +101,8 @@ describe('registry', () => {
         version: 1,
         settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
         telegram: { default_recipients: [], alerts: false },
-        modems: [{ id: 'gsm1', driver: 'dongle', imei: '490154203237542', enabled: true, uac: false, usb_port: null, ring: [], ring_timeout: 120,
+        modems: [{ id: 'gsm1', driver: 'dongle', imei: '490154203237542', phone_number: null, enabled: true, uac: false, usb_port: null, ring: [],
+          ring_timeout: 120,
           incoming_context: null, group: null, recipients: null, ports: null }],
         phones: [{ number: '501', label: null, secret: '501', outbound: null, context: null, direct_media: false }],
       });
@@ -186,7 +187,7 @@ describe('registry', () => {
           ['version', 'must be 1, the registry version this controller reads (got "1")'],
           ['modems[0].driver', 'must be quectel or dongle (got "Quectel")'],
           ['modems[0].imei', 'must be a quoted string of 15 digits (got number 490154203237534)'],
-          ['modems[1].extra', 'unknown key (allowed: id, driver, imei, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
+          ['modems[1].extra', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
           ['modems[1].uac', 'must be false for a dongle modem (UAC audio is quectel only)'],
           ['phones[1].outbound', 'modem "gsm9" is not in modems'],
           ['phones[2].secret', MESSAGES.secret],
@@ -205,8 +206,8 @@ describe('registry', () => {
       assert.ok(!Object.isFrozen(input.modems[0].ring));
       assert.notEqual(registry.modems[0]?.ring, input.modems[0].ring);
       assert.deepEqual(Object.keys(registry), ['version', 'settings', 'telegram', 'modems', 'phones']);
-      assert.deepEqual(Object.keys(registry.modems[1] ?? {}), ['id', 'driver', 'imei', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout',
-        'incoming_context', 'group', 'recipients', 'ports']);
+      assert.deepEqual(Object.keys(registry.modems[1] ?? {}), ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring',
+        'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports']);
       assert.deepEqual(Object.keys(registry.phones[0] ?? {}), ['number', 'label', 'secret', 'outbound', 'context', 'direct_media']);
       assertProblems(() => validate(null), [['', 'must be a mapping (got null)']]);
       assert.throws(() => validate([]), { message: 'invalid registry registry: 1 problem\n  (file): must be a mapping (got a list)' });
@@ -337,6 +338,13 @@ describe('registry', () => {
         ['modems[1].group', 'must be null or a whole number from 0 to 2147483647 (got number -1)'],
         ['phones[2].direct_media', 'must be true or false (got "true")'],
       ]],
+      ['own phone numbers: international format only', (r) => {
+        r.modems[0].phone_number = '1234567890';
+        r.modems[1].phone_number = 12345678901;
+      }, [
+        ['modems[0].phone_number', 'must be null or a quoted number in international format: + and 6 to 15 digits (got "1234567890")'],
+        ['modems[1].phone_number', 'must be null or a quoted number in international format: + and 6 to 15 digits (got number 12345678901)'],
+      ]],
       ['language, time zone and labels', (r) => {
         r.settings = { ui_language: 'de', timezone: 'Mars/Olympus' };
         r.phones[0].label = 'two\nlines';
@@ -453,6 +461,7 @@ describe('registry', () => {
         '  - id: "gsm1"',
         '    driver: "dongle"',
         '    imei: "490154203237542"',
+        '    phone_number: null',
         '    enabled: true',
         '    uac: false',
         '    usb_port: null',
@@ -474,6 +483,15 @@ describe('registry', () => {
       assertProblems(() => stringify({ version: 1, modems: [] }), [['phones', 'is required']]);
     });
 
+    test('a modem\'s own phone number is kept and written quoted; absent, it is null', () => {
+      const input = base();
+      input.modems[0].phone_number = '+1234567890';
+      const registry = validate(input);
+      assert.equal(registry.modems[0]?.phone_number, '+1234567890');
+      assert.equal(registry.modems[1]?.phone_number, null);
+      assert.match(stringify(registry), /\n {4}imei: "[0-9]{15}"\n {4}phone_number: "\+1234567890"\n/);
+    });
+
     test('a modem label of a file written before it was removed is read without a problem and left out of the next write', () => {
       const old = readFileSync(fixture('valid-two-modems.yaml'), 'utf8')
         .replace('  - id: gsm1                   # ^[a-z][a-z0-9_]{0,15}$ = driver device name = ${GSM1}\n', '$&    label: "GSM1 Quectel"\n')
@@ -488,7 +506,7 @@ describe('registry', () => {
       input.modems[1].name = 'GSM2';
       input.phones[0].label = 12;
       assertProblems(() => validate(input), [
-        ['modems[1].name', 'unknown key (allowed: id, driver, imei, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
+        ['modems[1].name', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
         ['phones[0].label', `${MESSAGES.label} (got number 12)`],
       ]);
     });

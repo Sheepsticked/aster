@@ -194,6 +194,18 @@ describe('http modem routes', () => {
       assert.deepEqual([response.json().modem.group, response.json().modem.enabled], [7, false]);
       assert.equal(Object.hasOwn(response.json().modem, 'label'), false, 'a modem is named by its id');
 
+      const numbered = await h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: { phone_number: '+1234567890' } });
+      assert.equal(numbered.statusCode, 200);
+      assert.equal(/** @type {any} */ (h.applies[1]).registry.modems[0].phone_number, '+1234567890', 'the number entered by hand');
+      assert.equal(numbered.json().modem.phone_number, '+1234567890');
+      for (const phone_number of ['1234567890', '+12345', 1234567890]) {
+        const refused = await h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: { phone_number } });
+        assert.equal(refused.statusCode, 400, JSON.stringify(phone_number));
+      }
+      const cleared = await h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: { phone_number: null } });
+      assert.equal(cleared.statusCode, 200);
+      assert.equal(/** @type {any} */ (h.applies[2]).registry.modems[0].phone_number, null);
+
       const renamed = await h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: { id: 'gsm9' } });
       assert.equal(renamed.statusCode, 400, 'the id names the device, the contexts and the globals: a rename is a delete and an add');
       const empty = await h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: {} });
@@ -202,7 +214,7 @@ describe('http modem routes', () => {
       assert.equal(labelled.statusCode, 400, 'a modem has no label');
       const missing = await h.app.inject({ method: 'PUT', url: '/api/modems/nosuch', headers: { cookie }, payload: { enabled: false } });
       assert.equal(missing.statusCode, 404);
-      assert.equal(h.applies.length, 1);
+      assert.equal(h.applies.length, 3);
     } finally {
       await h.stop();
     }
@@ -276,7 +288,7 @@ describe('http modem routes', () => {
     }
   });
 
-  test('forwarding, AT and USSD: GET is the last query, POST enqueues the operation the driver modules expect', async () => {
+  test('forwarding, AT, USSD and the SIM number: GET is the last query, POST enqueues the operation the driver modules expect', async () => {
     const h = await harness({ devices: deviceState(new Map([['gsm1', row()]])) });
     try {
       const { cookie } = await h.login();
@@ -309,6 +321,17 @@ describe('http modem routes', () => {
       assert.deepEqual(h.opsOf('ussd')[0]?.params, { code: '*100#' });
       assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/ussd', headers: { cookie }, payload: { code: 'AT+CSQ' } })).statusCode, 400);
       assert.equal(h.opsOf('ussd').length, 1);
+
+      const sim = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/sim-number', headers: { cookie }, payload: { number: '+1234567890' } });
+      assert.equal(sim.statusCode, 202);
+      assert.equal(sim.json().operation.kind, 'sim-number');
+      assert.deepEqual(h.opsOf('sim-number')[0]?.params, { number: '+1234567890' });
+      for (const payload of [{}, { number: '1234567890' }, { number: '+12345' }, { number: '+1234567890', storage: 'SM' }]) {
+        const response = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/sim-number', headers: { cookie }, payload });
+        assert.equal(response.statusCode, 400, JSON.stringify(payload));
+      }
+      assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm9/sim-number', headers: { cookie }, payload: { number: '+1234567890' } })).statusCode, 404);
+      assert.equal(h.opsOf('sim-number').length, 1);
 
       const cancel = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/ussd/cancel', headers: { cookie }, payload: {} });
       assert.equal(cancel.statusCode, 202);

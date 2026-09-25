@@ -12,6 +12,7 @@ modems:
   - id: "gsm1"
     driver: "quectel"
     imei: "490154203237534"
+    phone_number: null
     enabled: true
     uac: true
     usb_port: null
@@ -24,6 +25,7 @@ modems:
   - id: "gsm2"
     driver: "dongle"
     imei: "356938035643817"
+    phone_number: null
     enabled: false
     uac: false
     usb_port: null

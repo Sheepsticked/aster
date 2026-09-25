@@ -468,6 +468,76 @@ test.describe('the modem page', () => {
     await expect(page.locator('#modem-driver-error')).toHaveCount(0);
   });
 
+  test('hides the driver\'s last error while a restart asked for here settles', async ({ page }) => {
+    await page.goto('/modems/gsm2');
+    const box = page.locator('#modem-driver-error');
+    await expect(box).toBeVisible();
+    await page.getByRole('group', { name: ru['modem.quick_actions'] }).getByRole('button', { name: ru['modem.action_restart'] }).click();
+    await expect(box).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test('keeps a number entered by hand and shows it, marked, where the SIM reports none; an empty field removes it', async ({ page }, info) => {
+    await page.goto('/modems/gsm2');
+    const box = await openSection(page, 'modem-number');
+    await expect(box.getByText(ru['number.sim_silent'])).toBeVisible();
+    const field = box.getByLabel(ru['number.label']);
+    const save = box.getByRole('button', { name: ru['number.save'], exact: true });
+    await expect(save).toBeDisabled();
+    await field.fill('12345');
+    await save.click();
+    await expect(box.getByRole('alert')).toHaveText(ru['number.invalid']);
+    await field.fill('+1234567891');
+    await save.click();
+    await expect(box.getByText(ru['number.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(box.getByText(ru['number.entered'].replace('{number}', '+1234567891'))).toBeVisible();
+    await expect(save).toBeDisabled();
+    const summary = page.getByRole('heading', { name: ru['modem.summary'] }).locator('..');
+    await expect(summary.getByText(`+1234567891 · ${ru['modem.number_entered']}`)).toBeVisible();
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-modem-number.png`, fullPage: true });
+
+    // In-app navigation: a reload would start the mock afresh.
+    if (info.project.use.isMobile) await page.getByRole('button', { name: ru['nav.open_menu'] }).tap();
+    await page.getByRole('link', { name: ru['nav.overview'] }).filter({ visible: true }).click();
+    await expect(page.getByText(`+1234567891 · ${ru['modem.number_entered']}`)).toBeVisible();
+    await page.goBack();
+
+    const again = await openSection(page, 'modem-number');
+    await again.getByLabel(ru['number.label']).fill('');
+    await again.getByRole('button', { name: ru['number.save'], exact: true }).click();
+    await expect(again.getByText(ru['number.removed'])).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(ru['modem.number_entered'], { exact: false })).toHaveCount(0);
+  });
+
+  test('saves the number to the SIM after asking, and then the SIM reports it; a locked list or a missing modem says why not', async ({ page }) => {
+    await page.goto('/modems/gsm1');
+    const box = await openSection(page, 'modem-number');
+    await expect(box.getByText(ru['number.sim_reports'].replace('{number}', '+1234567890'))).toBeVisible();
+    const field = box.getByLabel(ru['number.label']);
+    await expect(field).toHaveValue('+1234567890');
+    const toSim = box.getByRole('button', { name: ru['number.to_sim'] });
+    const dialog = page.getByRole('dialog');
+    await field.fill('+1234567899');
+    await toSim.click();
+    await expect(dialog.getByText(ru['number.confirm_title'].replace('{number}', '+1234567899'))).toBeVisible();
+    await dialog.getByRole('button', { name: ru['number.to_sim'] }).click();
+    await expect(box.getByText(ru['number.written'].replace('{number}', '+1234567899'))).toBeVisible({ timeout: 15_000 });
+    await expect(box.getByText(ru['number.sim_reports'].replace('{number}', '+1234567899'), { exact: true })).toBeVisible();
+    await expect(page.getByText(ru['modem.number_entered'], { exact: false })).toHaveCount(0);
+
+    await field.fill('+9991234567');
+    await toSim.click();
+    await dialog.getByRole('button', { name: ru['number.to_sim'] }).click();
+    await expect(box.getByRole('alert')).toContainText(ru['number.pin2'], { timeout: 15_000 });
+    await expect(box.getByRole('alert')).toContainText('SIM PIN2 required');
+
+    await page.goto('/modems/gsm2');
+    const missing = await openSection(page, 'modem-number');
+    await missing.getByLabel(ru['number.label']).fill('+1234567891');
+    await missing.getByRole('button', { name: ru['number.to_sim'] }).click();
+    await page.getByRole('dialog').getByRole('button', { name: ru['number.to_sim'] }).click();
+    await expect(missing.getByRole('alert')).toContainText('Device not connected', { timeout: 15_000 });
+  });
+
   test('shows forwarding only when the modem confirmed it', async ({ page }, info) => {
     // gsm2 has no SIM, so its query is never answered and no number may be shown.
     await page.goto('/modems/gsm2');
@@ -545,6 +615,8 @@ test.describe('the modem page', () => {
   test('restarts, disables and enables the modem from the buttons at the top', async ({ page }) => {
     await page.goto('/modems/gsm1');
     const quick = page.getByRole('group', { name: ru['modem.quick_actions'] });
+    // The on/off switch comes first, Restart after it.
+    await expect(quick.getByRole('button')).toHaveText([ru['modem.action_disable'], ru['modem.action_restart']]);
     await quick.getByRole('button', { name: ru['modem.action_restart'] }).click();
     await expect(page.getByText(ru['modem.action_started'].replace('{action}', ru['modem.action_restart']), { exact: true })).toBeVisible({ timeout: 15_000 });
 
@@ -553,8 +625,8 @@ test.describe('the modem page', () => {
     await expect(quick.getByRole('button', { name: ru['modem.action_enable'] })).toBeVisible();
     // Enable is what a disabled modem's page is for, so it is the blue button (app.css "Buttons").
     await expect(quick.getByRole('button', { name: ru['modem.action_enable'] })).toHaveClass(/(^|\s)btn-primary(\s|$)/);
-    // A disabled modem has no quick Start: its radio stays off either way, and Start and Enable would both read «Включить».
-    await expect(quick.getByRole('button')).toHaveCount(2);
+    // A disabled modem has no quick Start: its radio stays off either way.
+    await expect(quick.getByRole('button')).toHaveText([ru['modem.action_enable'], ru['modem.action_restart']]);
     // Only `enabled` was saved: the settings form agrees with the stored entry, so the Save bar has nothing left to save.
     const settings = await openSection(page, 'modem-settings');
     await expect(settings.getByLabel(ru['modems.enabled'], { exact: true })).not.toBeChecked();
@@ -563,8 +635,24 @@ test.describe('the modem page', () => {
     await quick.getByRole('button', { name: ru['modem.action_enable'] }).click();
     await expect(page.getByText(ru['modem.enabled_done'], { exact: true })).toBeVisible({ timeout: 15_000 });
     await expect(quick.getByRole('button', { name: ru['modem.action_disable'] })).toBeVisible();
-    await expect(quick.getByRole('button')).toHaveCount(3);
+    // A running modem has nothing to start: Restart and Disable only.
+    await expect(quick.getByRole('button')).toHaveCount(2);
     await expect(settings.getByLabel(ru['modems.enabled'], { exact: true })).toBeChecked();
+  });
+
+  test('offers the quick Start only while the modem is stopped, and names it apart from Enable', async ({ page }) => {
+    expect(ru['modem.action_start']).not.toBe(ru['modem.action_enable']);
+    await page.goto('/modems/gsm1');
+    const quick = page.getByRole('group', { name: ru['modem.quick_actions'] });
+    // Exact: «Перезапустить» (Restart) contains «запустить».
+    const start = quick.getByRole('button', { name: ru['modem.action_start'], exact: true });
+    await expect(start).toHaveCount(0);
+    const actions = await openSection(page, 'modem-actions');
+    await actions.getByRole('button', { name: ru['modem.action_stop'] }).click();
+    await expect(start).toBeVisible({ timeout: 15_000 });
+    await expect(quick.getByRole('button')).toHaveText([ru['modem.action_disable'], ru['modem.action_restart'], ru['modem.action_start']]);
+    await start.click();
+    await expect(start).toHaveCount(0, { timeout: 15_000 });
   });
 
   test('saves only what changed, and says so until it is saved', async ({ page }) => {
@@ -610,7 +698,6 @@ test.describe('the buttons', () => {
     await page.goto('/modems/gsm1');
     // The modem's own actions are plain buttons, apart from what takes it off the air.
     const quick = page.getByRole('group', { name: ru['modem.quick_actions'] });
-    await expect(quick.getByRole('button', { name: ru['modem.action_start'], exact: true })).toHaveClass(is('btn-plain'));
     await expect(quick.getByRole('button', { name: ru['modem.action_restart'], exact: true })).toHaveClass(is('btn-plain'));
     await expect(quick.getByRole('button', { name: ru['modem.action_disable'], exact: true })).toHaveClass(is('btn-danger'));
     const actions = await openSection(page, 'modem-actions');

@@ -13,6 +13,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
  * @property {string} id
  * @property {'quectel' | 'dongle'} driver
  * @property {string} imei
+ * @property {string | null} phone_number  the SIM's number as entered by hand, shown when the SIM does not report one
  * @property {boolean} enabled
  * @property {boolean} uac
  * @property {string | null} usb_port
@@ -47,7 +48,7 @@ const KEYS = {
   settings: ['ui_language', 'timezone', 'retention_days'],
   retention: ['operations', 'notifications', 'messages', 'calls'],
   telegram: ['default_recipients', 'alerts'],
-  modem: ['id', 'driver', 'imei', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports'],
+  modem: ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports'],
   ports: ['data', 'audio'],
   phone: ['number', 'label', 'secret', 'outbound', 'context', 'direct_media'],
 };
@@ -62,7 +63,7 @@ const DROPPED = { modem: ['label'] };
 export const DEFAULTS = deepFreeze({
   settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
   telegram: { default_recipients: [], alerts: false },
-  modem: { uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, ports: null },
+  modem: { phone_number: null, uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, ports: null },
   phone: { label: null, outbound: null, context: null, direct_media: false },
 });
 
@@ -70,6 +71,8 @@ const ID = /^[a-z][a-z0-9_]{0,15}$/;
 const IMEI = /^[0-9]{15}$/;
 const USB_PORT = /^[0-9]+-[0-9]+(?:\.[0-9]+)*$/;
 const NUMBER = /^[0-9]{3,6}$/;
+/** A modem's own number: international format, as AT+CPBW stores it with type 145. */
+const PHONE_NUMBER = /^\+[0-9]{6,15}$/;
 const CHAT_ID = /^-?[0-9]+$/;
 const CONTEXT = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,78}$/;
 const DEVICE = /^\/dev(?:\/[A-Za-z0-9_.:+@-]+)+$/;
@@ -357,6 +360,8 @@ function normalizeModem(c, raw, path, seen) {
   const driver = c.field(raw, 'driver', path, /** @type {Modem['driver']} */ ('quectel'), isDriver, 'must be quectel or dongle');
   const imei = c.field(raw, 'imei', path, '', matching(IMEI), 'must be a quoted string of 15 digits');
   if (imei !== '') c.unique(seen.imeis, imei, `${path}.imei`, 'IMEI');
+  const phoneNumber = c.field(raw, 'phone_number', path, d.phone_number, nullable(matching(PHONE_NUMBER)),
+    'must be null or a quoted number in international format: + and 6 to 15 digits');
   const enabled = c.field(raw, 'enabled', path, false, isBoolean, MESSAGE.bool);
   const uac = c.field(raw, 'uac', path, d.uac, isBoolean, MESSAGE.bool);
   if (uac && raw.driver === 'dongle') c.fail(`${path}.uac`, 'must be false for a dongle modem (UAC audio is quectel only)');
@@ -384,7 +389,7 @@ function normalizeModem(c, raw, path, seen) {
     ports = { data, audio };
   }
   return {
-    id, driver, imei, enabled, uac, usb_port: usbPort, ring, ring_timeout: ringTimeout, incoming_context: incomingContext, group, recipients,
+    id, driver, imei, phone_number: phoneNumber, enabled, uac, usb_port: usbPort, ring, ring_timeout: ringTimeout, incoming_context: incomingContext, group, recipients,
     ports,
   };
 }

@@ -558,7 +558,7 @@ function modemPost(body) {
     return error(`modem ${taken.id} already has that ${taken.id === fields.id ? 'id' : taken.imei === fields.imei ? 'IMEI' : 'USB port'}`, 409);
   }
   const modem = {
-    id: fields.id, driver: fields.driver, imei: fields.imei, enabled: fields.enabled ?? true,
+    id: fields.id, driver: fields.driver, imei: fields.imei, phone_number: fields.phone_number ?? null, enabled: fields.enabled ?? true,
     uac: fields.uac ?? false, usb_port: fields.usb_port ?? null, group: null, ring: [], ring_timeout: 120,
     incoming_context: null, recipients: null, ports: null, state: 'unverified', driver_state: null, gsm_registration: null,
     rssi: null, provider: null, number: null, data_tty: null, observed_at: null, forwarding: null, detail: null,
@@ -608,6 +608,23 @@ function modemRoute(method, id, verb, body) {
     const run = atAnswer(id, String(body?.command ?? ''));
     return json({ operation: operation('at', id, run.ok ? { result: run.result } : { status: 'failed', result: run.result, error: run.error }) }, 202);
   }
+  if (verb === 'sim-number') {
+    const number = String(body?.number ?? '');
+    if (!/^\+[0-9]{6,15}$/.test(number)) return error('body/number must match pattern "^\\+[0-9]{6,15}$"', 400);
+    const write = `AT+CPBW=1,"${number}",145`;
+    if (modem.state === 'flapping') {
+      return json({ operation: operation('sim-number', id, { status: 'failed', error: `AT+CPBS?: [${id}] Device not connected; nothing was written to the SIM` }) }, 202);
+    }
+    // A number starting with +999 stands for a SIM that locks its own-number list with PIN2.
+    if (number.startsWith('+999')) return json({ operation: operation('sim-number', id, { status: 'failed', error: `${write}: +CME ERROR: SIM PIN2 required` }) }, 202);
+    // The driver reads the new number with AT+CNUM, so the modem reports it once the write is done.
+    setTimeout(() => {
+      modem.number = number;
+      publishState(id, modem.state);
+    }, OPERATION_MS / 2);
+    return json({ operation: operation('sim-number', id, { result: { modem_id: id, driver: modem.driver, number, storage: 'SM', read_back: number,
+      reported: [number], restored: true, transactions: [] } }) }, 202);
+  }
   if (verb === 'ussd') {
     const connected = modem.state !== 'flapping';
     const code = String(body?.code ?? '');
@@ -626,6 +643,12 @@ function modemRoute(method, id, verb, body) {
   }
   if (['start', 'stop', 'restart', 'reset', 'remap'].includes(String(verb))) {
     const kind = verb === 'remap' ? 'remap' : `modem-${verb}`;
+    // As devices/state.js does: a restart of Aster's own settles for a while before a failure counts.
+    modem.detail = { ...(modem.detail ?? {}), restarting: true };
+    setTimeout(() => {
+      modem.detail = { ...modem.detail, restarting: false };
+      publishState(id, modem.state);
+    }, 60_000);
     if (verb === 'start' || verb === 'restart') setTimeout(() => publishState(id, 'connecting'), OPERATION_MS / 2);
     if (verb === 'stop') setTimeout(() => publishState(id, 'stopped'), OPERATION_MS / 2);
     return json({ operation: operation(kind, id, { result: { events: [] } }) }, 202);

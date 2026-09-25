@@ -10,6 +10,7 @@ import { createConfigOps } from './config/apply.js';
 import { DEFAULTS as REGISTRY_DEFAULTS, load as loadRegistry, validate } from './config/registry.js';
 import { createAtOps } from './at/client.js';
 import { createForwardingOps } from './at/forwarding.js';
+import { createSimNumberOps } from './at/simnumber.js';
 import { createUssdOps } from './at/ussd.js';
 import { createLifecycleOps } from './devices/lifecycle.js';
 import { createRemapOps } from './devices/remap.js';
@@ -133,6 +134,7 @@ async function main() {
   createAtOps({ registry, log: atLog }).register(runner);
   createForwardingOps({ db, registry, log: atLog }).register(runner);
   createUssdOps({ registry, log: atLog }).register(runner);
+  createSimNumberOps({ registry, log: atLog }).register(runner);
   const reports = ami ? createReportListener({ ami, db, log: smsLog }) : null;
   const connections = ami ? watchConnections({ ami, bus }) : null;
   const devices = createDeviceState({

@@ -9,11 +9,14 @@ const USB_PORT = { type: ['string', 'null'], pattern: '^[0-9]+-[0-9]+(?:\\.[0-9]
 const CONTEXT = { type: ['string', 'null'], maxLength: 79 };
 const PHONE_NUMBER = { type: 'string', pattern: '^[0-9]{3,6}$' };
 const DEVICE = { type: 'string', pattern: '^/dev(?:/[A-Za-z0-9_.:+@-]+)+$' };
+/** A modem's own number in international format (config/registry.js, at/simnumber.js). */
+const OWN_NUMBER = { type: 'string', pattern: '^\\+[0-9]{6,15}$' };
 
 /** The fields a modem has in config/aster.yaml; POST requires id, driver and imei, PUT takes any subset but never the id. */
 const FIELDS = {
   driver: { enum: ['quectel', 'dongle'] },
   imei: IMEI,
+  phone_number: { ...OWN_NUMBER, type: ['string', 'null'] },
   enabled: { type: 'boolean' },
   uac: { type: 'boolean' },
   usb_port: USB_PORT,
@@ -80,6 +83,12 @@ export const forwarding = ({
       time: { enum: [5, 10, 15, 20, 25, 30] },
     },
   },
+});
+
+/** POST /api/modems/:id/sim-number: the number to write into the SIM's own-number list. */
+export const simNumber = ({
+  params: idParam,
+  body: { type: 'object', required: ['number'], additionalProperties: false, properties: { number: OWN_NUMBER } },
 });
 
 /** POST /api/modems/:id/at (at/client.js checks the command text and the timeout again inside the operation). */

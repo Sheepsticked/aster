@@ -250,6 +250,47 @@ describe('devices state', () => {
     }
   });
 
+  test('Disconnects of Aster\'s own restarts are not flapping: while one runs, a minute past its end, and a registry apply\'s', async () => {
+    const h = harness();
+    h.devices.pollSysfs();
+    h.devices.start();
+    /** @param {number} id @param {string} kind @param {string | null} modem @param {string} status @param {Record<string, unknown> | null} [result] */
+    const op = (id, kind, modem, status, result = null) =>
+      h.bus.publish('op.progress', { id, kind, modem_id: modem, actor: 'admin', status, message: null, result, error: null, at: 1 });
+    /** @param {string} device @param {number} n */
+    const drop = (device, n) => {
+      for (let i = 0; i < n; i += 1) h.ami.emitStatus(device, 'Disconnect');
+    };
+    const detail = async (/** @type {string} */ device) => {
+      await h.devices.refresh();
+      const { disconnects, restarting } = JSON.parse(h.row(device).detail_json);
+      return { state: h.row(device).state, disconnects, restarting };
+    };
+    try {
+      op(10, 'modem-restart', 'ec25', 'running');
+      drop('ec25', 3);
+      assert.deepEqual(await detail('ec25'), { state: 'ready', disconnects: 0, restarting: true }, 'while the restart runs');
+      op(10, 'modem-restart', 'ec25', 'done');
+      h.tick(59_000);
+      drop('ec25', 3);
+      assert.deepEqual(await detail('ec25'), { state: 'ready', disconnects: 0, restarting: true }, 'within the minute after it');
+      h.tick(2_000);
+      drop('ec25', 3);
+      assert.deepEqual(await detail('ec25'), { state: 'flapping', disconnects: 3, restarting: false }, 'after that minute a modem that keeps dropping is flapping');
+
+      // A registry apply names the modems it restarted only in its result; what they dropped while it ran is forgiven then.
+      op(11, 'registry-apply', null, 'running');
+      drop('e173', 2);
+      drop('ec25', 1);
+      op(11, 'registry-apply', null, 'done', { restarted: [], reconcile: { removed: [], desired: { e173: 'start' }, radio: { e173: 'on' } } });
+      drop('e173', 2);
+      assert.deepEqual(await detail('e173'), { state: 'ready', disconnects: 0, restarting: true });
+      assert.equal((await detail('ec25')).disconnects, 4, 'a modem the apply did not restart keeps its count');
+    } finally {
+      await h.devices.stop();
+    }
+  });
+
   test('sysfs poll: an unplugged port makes its modem absent and marks devices_seen, a replug reports the port and forgets the old identity', async () => {
     const h = harness();
     assert.deepEqual(h.devices.pollSysfs(), { added: [], removed: [], present: [{ port: '1-1', vendor: '12d1', product: '1436', driver: 'dongle' }, { port: '1-2', vendor: '2c7c', product: '0125', driver: 'quectel' }] });

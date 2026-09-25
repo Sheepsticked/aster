@@ -42,8 +42,9 @@ export const USSD_MENU = '*111#';
  * One device as `…ShowDevices` reports it, with the values devices/state.js `parseDeviceEntry` reads filled in.
  * @param {{ name: string, driver: 'quectel' | 'dongle', started: boolean, radio: string, imei: string, imsi: string, data: string, audio: string }} device
  * @param {string} actionId
+ * @param {string | null} own  the number in the SIM's own-number list, which the driver reads with AT+CNUM
  */
-function deviceEntry(device, actionId) {
+function deviceEntry(device, actionId, own) {
   const on = device.started;
   // radio=off (a disabled modem): the driver keeps it connected and identified but never initializes it
   const off = on && device.radio === 'off';
@@ -74,7 +75,7 @@ function deviceEntry(device, actionId) {
     ['GSMRegistrationStatus', up ? RUNNING.gsmReg : 'Unknown'],
     ['RSSI', up ? RUNNING.rssi : '0, <= -113 dBm'],
     ['ProviderName', up ? RUNNING.provider : 'NONE'],
-    ['SubscriberNumber', up ? RUNNING.number : 'Unknown'],
+    ['SubscriberNumber', up && own !== null ? own : 'Unknown'],
     ['TasksInQueue', '0'],
     ['CommandsInQueue', '0'],
     ['CurrentDeviceState', on ? RUNNING.current : 'stop'],
@@ -146,6 +147,15 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
   const forwarding = new Map();
   /** The devices whose USSD menu waits for an answer; an answer or AT+CUSD=2 closes it. */
   const menus = new Set();
+  /** Each SIM's own-number list and the phonebook selected (AT+CPBS/CPBW/CPBR/CNUM); a SIM starts with RUNNING.number in it. */
+  /** @type {Map<string, { storage: string, own: string | null }>} */
+  const phonebooks = new Map();
+  /** @param {string} name */
+  const phonebook = (name) => {
+    const found = phonebooks.get(name) ?? { storage: 'SM', own: RUNNING.number };
+    phonebooks.set(name, found);
+    return found;
+  };
 
   /**
    * What the stand-in network answers a USSD code with: USSD_MENU opens a menu (session state 1) whose options answer
@@ -312,7 +322,7 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
         const listed = [...devices.values()]
           .filter((device) => device.driver === driver && (only === undefined || only === '' || device.name === only));
         send([['Response', 'Success'], ['ActionID', actionId], ['EventList', 'start'], ['Message', 'Device status list will follow']]);
-        for (const device of listed) send(deviceEntry(device, actionId));
+        for (const device of listed) send(deviceEntry(device, actionId, phonebook(device.name).own));
         send([['Event', `${p}ShowDevicesComplete`], ['ActionID', actionId], ['EventList', 'Complete'], ['ListItems', String(listed.length)]]);
         return;
       }
@@ -401,7 +411,23 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
       const upper = command.toUpperCase();
       /** @type {string[]} */
       let lines = [];
+      /** The final result: OK, or the error line a modem ends with. */
+      let error = '';
+      const book = phonebook(device.name);
       if (upper.startsWith('AT+CSQ')) lines = ['+CSQ: 21,99'];
+      else if (upper === 'AT+CPBS?') lines = [book.storage === 'ON' ? `+CPBS: "ON",${book.own === null ? 0 : 1},2` : `+CPBS: "${book.storage}",0,250`];
+      else if (upper.startsWith('AT+CPBS=')) {
+        const storage = /^AT\+CPBS="(SM|ON|ME|FD|DC|MC|RC|EN)"$/.exec(upper)?.[1];
+        if (storage) book.storage = storage;
+        else error = 'ERROR';
+      } else if (upper.startsWith('AT+CPBW=1')) {
+        const number = /^AT\+CPBW=1(?:,"(\+?[0-9]{1,20})",(?:129|145))?$/.exec(upper);
+        if (!number) error = 'ERROR';
+        else if (book.storage === 'ON') book.own = number[1] ?? null;
+      } else if (upper === 'AT+CPBR=1') {
+        if (book.storage === 'ON' && book.own !== null) lines = [`+CPBR: 1,"${book.own}",145,""`];
+        else error = '+CME ERROR: not found';
+      } else if (upper === 'AT+CNUM') lines = book.own === null ? [] : [`+CNUM: ,"${book.own}",145`];
       else if (upper === 'AT+CUSD=2') menus.delete(device.name);
       else if (upper.startsWith('AT+CIMI')) lines = [device.imsi];
       else if (upper.startsWith('AT+CCFC=')) {
@@ -426,7 +452,7 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
         for (const line of lines) {
           send([['Event', `${p}AtResponse`], ['Privilege', 'call,all'], ['ActionID', tag], ['Device', device.name], ['Line', escape(line)]]);
         }
-        send([['Event', `${p}AtDone`], ['Privilege', 'call,all'], ['ActionID', tag], ['Device', device.name], ['Result', 'OK'], ['Error', '']]);
+        send([['Event', `${p}AtDone`], ['Privilege', 'call,all'], ['ActionID', tag], ['Device', device.name], ['Result', error === '' ? 'OK' : 'ERROR'], ['Error', error]]);
       }, 50);
     }
   });

@@ -126,6 +126,8 @@ export const api = {
   /** @param {string} id @param {{ code: string }} body */
   ussd: (id, body) => post(`/modems/${seg(id)}/ussd`, body),
   ussdCancel: (id) => post(`/modems/${seg(id)}/ussd/cancel`),
+  /** Writes the number into the SIM's own-number list. @param {string} id @param {{ number: string }} body */
+  simNumber: (id, body) => post(`/modems/${seg(id)}/sim-number`, body),
 
   phones: () => get('/phones'),
   /** @param {Record<string, unknown>} fields */

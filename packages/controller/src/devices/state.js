@@ -59,6 +59,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {string | null} radio     `RadioSetting` (keep | on | off), null when the driver does not report it
  * @property {number} disconnects      `Status: Disconnect` events within the flapping window
  * @property {boolean} flapping
+ * @property {boolean} restarting     an operation of Aster restarts the modem, or did within restartGraceMs
  * @property {string | null} vendor    of the USB device data_tty belongs to
  * @property {string | null} product
  * @property {string | null} reason    why the state is `unverified` (the driver is not loaded, does not list the device, reports an unknown state)
@@ -99,6 +100,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {number} staleMs          an observation older than this is `unverified` (30 s = three missed refreshes)
  * @property {number} flapWindowMs     the flapping window (2 min)
  * @property {number} flapDisconnects  Disconnects within the window that mean flapping (3)
+ * @property {number} restartGraceMs   after an operation that restarts a modem, its Disconnects this long are not flapping (60 s)
  */
 /**
  * @typedef {object} Options
@@ -116,7 +118,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
 /** @typedef {{ skipped: string | null, modems: number, listed: number, errors: Record<Driver, string | null>, published: string[] }} RefreshResult */
 
 export const DEFAULTS = Object.freeze({ refreshMs: 10_000, sysfsPollMs: 5_000, debounceMs: 300, actionTimeoutMs: 10_000, staleMs: 30_000, flapWindowMs: 120_000, flapDisconnects: 3,
-  seenTouchMs: 15 * 60_000 });
+  restartGraceMs: 60_000, seenTouchMs: 15 * 60_000 });
 export const DRIVERS = Object.freeze(/** @type {const} */ (['quectel', 'dongle']));
 /** The eleven UI states; `unverified` carries `since` = the row's observed_at. */
 export const UI_STATES = Object.freeze(/** @type {const} */ (['disabled', 'unmapped', 'unverified', 'duplicate-imei', 'flapping', 'absent', 'stopped', 'connecting', 'no-network', 'ready', 'busy']));
@@ -142,6 +144,10 @@ export const DRIVER_STATES = Object.freeze(/** @type {Readonly<Record<string, Ui
 }));
 /** Operation kinds whose end changes what ShowDevices reports. */
 const REFRESH_AFTER = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'modem-remove', 'registry-apply', 'remap', 'scan']);
+/** Operation kinds that restart, stop or start the one modem they name; its Disconnects meanwhile are theirs, not flapping. */
+const RESTARTS_ONE = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'remap']);
+/** How long a running operation may keep a modem's Disconnects from counting when its end is never seen. */
+const RUNNING_QUIET_MS = 10 * 60_000;
 const IMEI = /^[0-9]{15}$/;
 const IMSI = /^[0-9]{6,15}$/;
 const FINISHED = new Set(FINAL);
@@ -276,7 +282,8 @@ export function uiState(modem, state, seen, { now = Date.now(), staleMs = DEFAUL
  * @param {ModemState} row  what changed since the last publish is judged on these fields (not on observed_at or counters)
  */
 const fingerprint = (row) => JSON.stringify([row.state, row.driver_state, row.gsm_reg, row.rssi, row.provider, row.number, row.data_tty, row.usb_port,
-  row.detail.listed, row.detail.current, row.detail.desired, row.detail.flapping, row.detail.imei, row.detail.radio, row.detail.reason]);
+  row.detail.listed, row.detail.current, row.detail.desired, row.detail.flapping, row.detail.restarting, row.detail.imei, row.detail.radio,
+  row.detail.reason]);
 
 /**
  * @param {Options} options
@@ -307,6 +314,10 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
   const published = new Map();
   /** `Status: Disconnect` times per device. @type {Map<string, number[]>} */
   const disconnects = new Map();
+  /** Per device, the time span in which Disconnects are Aster's own restarts, not flapping. @type {Map<string, { from: number, until: number }>} */
+  const quiet = new Map();
+  /** When each running operation was first seen, by id. @type {Map<number, number>} */
+  const opStarts = new Map();
   /** The last sysfs poll: null until one succeeded, and after one failed. @type {Map<string, UsbModem> | null} */
   let usbPresent = null;
   let sysfsFailed = false;
@@ -351,6 +362,57 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
     if (imsi !== null && row.imsi !== imsi) return false;
     if (dataTty !== null && row.data_tty !== dataTty) return false;
     return at - Number(row.last_seen) < t.seenTouchMs;
+  }
+
+  /** @param {string} device @param {number} at */
+  function isQuiet(device, at) {
+    const span = quiet.get(device);
+    if (span && at > span.until) quiet.delete(device);
+    return span !== undefined && at >= span.from && at <= span.until;
+  }
+
+  /** Drops the Disconnects of a device from `from` on: the restart that caused them was Aster's. @param {string} device @param {number} from */
+  function forgive(device, from) {
+    const kept = (disconnects.get(device) ?? []).filter((at) => at < from);
+    if (kept.length === 0) disconnects.delete(device);
+    else disconnects.set(device, kept);
+  }
+
+  /**
+   * The modems a finished registry-apply restarted: the ones reconcile verified (their radio or desired state changed), those
+   * restarted for their audio settings, and the removed ones.
+   * @param {any} result
+   * @returns {string[]}
+   */
+  function restartedBy(result) {
+    const reconcile = result?.reconcile ?? {};
+    const ids = [...Object.keys(reconcile.desired ?? {}), ...Object.keys(reconcile.radio ?? {}), ...(Array.isArray(result?.restarted) ? result.restarted : []),
+      ...(Array.isArray(reconcile.removed) ? reconcile.removed.map((/** @type {any} */ entry) => entry?.id) : [])];
+    return [...new Set(ids.filter((id) => typeof id === 'string'))];
+  }
+
+  /**
+   * Opens a quiet span for the modems an operation restarts: from its start while it runs, and restartGraceMs past its end,
+   * which also forgives the Disconnects it caused before then.
+   * @param {{ id?: unknown, kind?: unknown, modem_id?: unknown, status?: unknown, result?: unknown }} op
+   */
+  function noteOperation(op) {
+    if (typeof op.id !== 'number' || typeof op.kind !== 'string' || typeof op.status !== 'string') return;
+    const one = RESTARTS_ONE.has(op.kind) && typeof op.modem_id === 'string';
+    if (!one && op.kind !== 'registry-apply') return;
+    const at = now();
+    if (!opStarts.has(op.id)) opStarts.set(op.id, at);
+    const from = /** @type {number} */ (opStarts.get(op.id));
+    const finished = FINISHED.has(/** @type {any} */ (op.status));
+    if (!finished) {
+      if (one) quiet.set(/** @type {string} */ (op.modem_id), { from, until: at + RUNNING_QUIET_MS });
+      return;
+    }
+    opStarts.delete(op.id);
+    for (const device of one ? [/** @type {string} */ (op.modem_id)] : restartedBy(op.result)) {
+      quiet.set(device, { from, until: at + t.restartGraceMs });
+      forgive(device, from);
+    }
   }
 
   /** @param {string} device */
@@ -498,6 +560,7 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
           radio: entry?.radio ?? null,
           disconnects: count,
           flapping: count >= t.flapDisconnects,
+          restarting: isQuiet(modem.id, now()),
           vendor: usb?.vendor ?? null,
           product: usb?.product ?? null,
           reason: null,
@@ -602,7 +665,8 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
   function onStatus(packet) {
     const device = header(packet, 'Device');
     if (!device) return;
-    if (header(packet, 'Status') === 'Disconnect') disconnects.set(device, [...(disconnects.get(device) ?? []), now()]);
+    const at = now();
+    if (header(packet, 'Status') === 'Disconnect' && !isQuiet(device, at)) disconnects.set(device, [...(disconnects.get(device) ?? []), at]);
     schedule();
   }
 
@@ -618,7 +682,8 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
       }
       unsubscribe = bus.subscribe((event) => {
         if (event.type !== 'op.progress') return;
-        const payload = /** @type {{ kind?: string, status?: string }} */ (event.payload);
+        const payload = /** @type {{ id?: number, kind?: string, modem_id?: string | null, status?: string, result?: unknown }} */ (event.payload);
+        noteOperation(payload);
         if (payload.kind && REFRESH_AFTER.has(payload.kind) && payload.status && FINISHED.has(payload.status)) schedule();
       });
       pollSysfs();

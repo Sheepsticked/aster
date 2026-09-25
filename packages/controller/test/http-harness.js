@@ -36,7 +36,7 @@ export const REGISTRY = Object.freeze({
 
 /** The operation kinds the routes enqueue; every one is a recording stub here. */
 export const KINDS = Object.freeze(['registry-apply', 'config-apply', 'config-restore', 'modem-start', 'modem-stop', 'modem-restart',
-  'modem-reset', 'remap', 'scan', 'at', 'forwarding', 'ussd', 'ussd-cancel']);
+  'modem-reset', 'remap', 'scan', 'at', 'forwarding', 'ussd', 'ussd-cancel', 'sim-number']);
 /** Kinds that take the global lock, so a stub must declare it (ops/runner.js refuses 'queue' for them). */
 const GLOBAL = new Set(['registry-apply', 'config-apply', 'config-restore', 'remap']);
 

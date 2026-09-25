@@ -12,6 +12,7 @@ modems: []
   # - id: gsm1                 # ^[a-z][a-z0-9_]{0,15}$; becomes the driver device name and ${GSM1}
   #   driver: quectel          # quectel | dongle
   #   imei: "490154203237534"  # 15 digits, unique
+  #   phone_number: null       # e.g. "+1234567890"; shown when the SIM does not report its own number
   #   enabled: true            # -> radio on | off (a disabled modem is kept with its radio off)
   #   uac: true                # quectel only -> quec_uac=1 + alsadev from usb_port
   #   usb_port: "1-1.3"        # filled by Scan / Assign / remap

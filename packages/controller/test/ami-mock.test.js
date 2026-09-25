@@ -9,6 +9,8 @@ import { join } from 'node:path';
 import { afterEach, describe, test } from 'node:test';
 import { AmiClient, AmiError } from '../src/ami/client.js';
 import { BANNER, CREDENTIALS, USSD_MENU, startMockAmi } from '../src/ami/mock.js';
+import { createSimNumberOps } from '../src/at/simnumber.js';
+import { validate } from '../src/config/registry.js';
 import { parseDiscovery } from '../src/devices/scan.js';
 import { parseDeviceEntry, showDevices } from '../src/devices/state.js';
 import { REQUIRED_MODULES, runningModules } from '../src/http/routes/health.js';
@@ -209,6 +211,23 @@ describe('ami mock', () => {
     await at('AT+CCFC=1,2');
     await at('AT+CCFC=0,2');
     assert.deepEqual(lines.splice(0), ['+CCFC: 0,1', '+CCFC: 1,1,"+375291112233",145']);
+  });
+
+  test('keeps each SIM\'s own-number list: the sim-number operation writes it, and the device list then reports it', async () => {
+    const { ami } = await connected();
+    assert.equal((await showDevices(ami, 'quectel'))[0]?.number, '+1234567890', 'a SIM starts with the stand-in number');
+    const registry = validate({ version: 1, modems: [
+      { id: 'gsm1', driver: 'quectel', imei: '867435040012345', enabled: true },
+      { id: 'gsm2', driver: 'dongle', imei: '356938031234560', enabled: true },
+    ], phones: [] });
+    const { handler } = createSimNumberOps({ registry: () => registry });
+    const silent = { debug() {}, info() {}, warn() {}, error() {}, child: () => silent };
+    /** @param {string} modemId @param {string} number */
+    const run = (modemId, number) => handler(/** @type {any} */ ({ op: { id: 1, modemId, params: { number } }, ami, progress() {}, log: silent }));
+    const result = /** @type {any} */ (await run('gsm1', '+1234567891'));
+    assert.deepEqual([result.storage, result.read_back, result.reported, result.restored], ['SM', '+1234567891', ['+1234567891'], true]);
+    assert.equal((await showDevices(ami, 'quectel'))[0]?.number, '+1234567891');
+    await assert.rejects(run('gsm2', '+1234567891'), /AT\+CPBS\?: .*Device not connected/, 'a stopped device refuses the first command');
   });
 
   test('answers a USSD request with a NewUSSD event', async () => {

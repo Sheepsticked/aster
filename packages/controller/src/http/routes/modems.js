@@ -5,8 +5,8 @@ import { TIMED } from '../../at/forwarding.js';
 import { assignWithStarterPhones } from '../../config/starter.js';
 import { lastDriverError } from '../../logs/driver.js';
 import { start as startOp, applyRegistry, loadForChange } from '../ops.js';
-import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, update, ussd as ussdSchema,
-  ussdCancel as ussdCancelSchema } from '../schemas/modems.js';
+import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, simNumber as simNumberSchema,
+  update, ussd as ussdSchema, ussdCancel as ussdCancelSchema } from '../schemas/modems.js';
 
 /** The device actions and the operation kind each one enqueues; `modem-remove` is reconcile's, not the API's. */
 export const ACTIONS = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
@@ -30,6 +30,7 @@ export function modemView(modem, ctx, states) {
     id: modem.id,
     driver: modem.driver,
     imei: modem.imei,
+    phone_number: modem.phone_number,
     enabled: modem.enabled,
     uac: modem.uac,
     usb_port: modem.usb_port,
@@ -53,6 +54,7 @@ export function modemView(modem, ctx, states) {
       current: detail.current,
       desired: detail.desired,
       flapping: detail.flapping,
+      restarting: detail.restarting ?? false,
       imsi: detail.imsi,
       model: detail.model,
       firmware: detail.firmware,
@@ -208,6 +210,17 @@ export function modemRoutes(app, ctx) {
     if (body.reason === 'all' && body.action !== 'query') return reply.code(400).send({ error: 'reason "all" is only for "query"' });
     const operation = startOp(ctx, { kind: 'forwarding', modemId: id, params: { ...body }, actor: 'admin' });
     ctx.log.info('forwarding queued', { modem: id, action: body.action, reason: body.reason ?? 'unconditional', operation: operation.id });
+    return reply.code(202).send({ operation });
+  });
+
+  // Writes the number into the SIM's own-number list, which the driver reads with AT+CNUM (at/simnumber.js).
+  app.post('/api/modems/:id/sim-number', { schema: simNumberSchema }, async (request, reply) => {
+    const id = /** @type {any} */ (request.params).id;
+    const body = /** @type {{ number: string }} */ (request.body);
+    const found = find(id, reply);
+    if (!found) return reply;
+    const operation = startOp(ctx, { kind: 'sim-number', modemId: id, params: { number: body.number }, actor: 'admin' });
+    ctx.log.info('SIM number write queued', { modem: id, operation: operation.id });
     return reply.code(202).send({ operation });
   });
 

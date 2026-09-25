@@ -4,6 +4,7 @@
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
   import DeviceTable from '../lib/DeviceTable.svelte';
+  import ModemNumber from '../lib/ModemNumber.svelte';
   import SignalBars from '../lib/SignalBars.svelte';
   import StateBadge from '../lib/StateBadge.svelte';
   import StickyActions from '../lib/StickyActions.svelte';
@@ -114,7 +115,7 @@
             </div>
             <div class="col-span-2 flex items-center justify-between gap-3">
               <dt class="text-slate-500">{t('modem.number')}</dt>
-              <dd class="min-w-0 truncate tabular-nums">{orNone(modem.number)}</dd>
+              <dd class="min-w-0 truncate tabular-nums"><ModemNumber reported={modem.number} entered={modem.phone_number} /></dd>
             </div>
             <div class="col-span-2 flex items-center justify-between gap-3">
               <dt class="text-slate-500">{t('modem.port')}</dt>

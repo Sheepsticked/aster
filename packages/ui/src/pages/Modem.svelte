@@ -1,5 +1,5 @@
-<!-- Modem detail page in collapsible sections: registry fields (only changes are sent, one registry-apply), device actions,
-     and AT/USSD/forwarding operations. Forwarding shows only states the modem verified via a +CCFC query. -->
+<!-- Modem detail page in collapsible sections: registry fields (only changes are sent, one registry-apply), the phone number,
+     device actions, and AT/USSD/forwarding operations. Forwarding shows only states the modem verified via a +CCFC query. -->
 <script>
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
@@ -7,6 +7,7 @@
   import ChipList from '../lib/ChipList.svelte';
   import Confirm from '../lib/Confirm.svelte';
   import Field from '../lib/Field.svelte';
+  import ModemNumber from '../lib/ModemNumber.svelte';
   import Section from '../lib/Section.svelte';
   import SignalBars from '../lib/SignalBars.svelte';
   import StateBadge from '../lib/StateBadge.svelte';
@@ -30,6 +31,7 @@
   const FORWARD_TIMED = Object.freeze(['no_reply', 'conditional']);
   const FORWARD_TIMES = Object.freeze([5, 10, 15, 20, 25, 30]);
   const USSD_CODE = /^[0-9*#]{1,64}$/;
+  const OWN_NUMBER = /^\+[0-9]{6,15}$/;
   /** Action rows: on/off, then recovery. `when` applies only to actions that can wait for a call to end. */
   const ACTION_ROWS = Object.freeze([['start', 'stop'], ['restart', 'reset', 'remap']]);
   const TIMED = Object.freeze(['stop', 'restart']);
@@ -90,6 +92,17 @@
   let ussdProblem = $state(null);
   /** @type {string | null} */
   let ussdNote = $state(null);
+  /** The Phone number field: filled once, from the number entered by hand or else the one the SIM reports. */
+  let ownNumber = $state(/** @type {string | null} */ (null));
+  let numberBusy = $state(/** @type {'save' | 'sim' | null} */ (null));
+  let numberConfirm = $state(false);
+  /** @type {string | null} */
+  let numberProblem = $state(null);
+  /** @type {string | null} */
+  let numberNote = $state(null);
+  /** Save stays off while the field holds the stored number, so an unchanged number does not rewrite config/aster.yaml. */
+  const numberChanged = $derived(modem !== null && ((ownNumber ?? '').trim() || null) !== (modem.phone_number ?? null));
+
   /** The operator keeps the session open for an answer (the `type` of at/ussd.js). */
   const ussdWaiting = $derived(ussdResult?.type === 1);
   /** What the answer's session state means, when there is something to say about it. */
@@ -121,6 +134,7 @@
       error = null;
       // A refetch never overwrites a form being edited.
       if (form === null && modem !== null) form = editable(modem);
+      if (ownNumber === null && modem !== null) ownNumber = modem.phone_number ?? modem.number ?? '';
     } catch (err) {
       error = messageOf(err);
       missing = /** @type {any} */ (err)?.status === 404;
@@ -170,9 +184,10 @@
     return shown.driver_state === 'Radio off' ? { text: t('modem.radio_off'), pending: false } : { text: t('modem.radio_off_pending'), pending: true };
   });
 
-  /** The states in which a modem tries and fails; there the driver's last error says why. */
+  /** The states in which a modem tries and fails; there the driver's last error says why. Not while a restart of Aster's
+      own settles: its first attempts are expected to fail. */
   const FAILING = Object.freeze(['connecting', 'flapping', 'no-network', 'unverified']);
-  const failing = $derived(shown !== null && FAILING.includes(shown.state));
+  const failing = $derived(shown !== null && FAILING.includes(shown.state) && !shown.detail?.restarting);
   /** @type {{ at: number, level: string, text: string, count: number } | null} */
   let driverError = $state(null);
 
@@ -354,6 +369,58 @@
     }
   }
 
+  /** Save keeps the number in config/aster.yaml; an empty field removes the one entered by hand. */
+  async function saveNumber(/** @type {SubmitEvent} */ event) {
+    event.preventDefault();
+    if (numberBusy !== null || !numberChanged) return;
+    const value = (ownNumber ?? '').trim();
+    numberProblem = null;
+    numberNote = null;
+    if (value !== '' && !OWN_NUMBER.test(value)) {
+      numberProblem = t('number.invalid');
+      return;
+    }
+    numberBusy = 'save';
+    try {
+      const { applied } = await settleChange(await api.saveModem(id, { phone_number: value === '' ? null : value }));
+      if (applied) numberNote = value === '' ? t('number.removed') : t('number.saved');
+      await load();
+    } catch (err) {
+      numberProblem = messageOf(err);
+    } finally {
+      numberBusy = null;
+    }
+  }
+
+  /** Save to SIM asks first: it replaces what the SIM's own-number list holds. */
+  function askWriteToSim() {
+    const value = (ownNumber ?? '').trim();
+    numberProblem = null;
+    numberNote = null;
+    if (!OWN_NUMBER.test(value)) {
+      numberProblem = t('number.invalid');
+      return;
+    }
+    ownNumber = value;
+    numberConfirm = true;
+  }
+
+  /** Writes the number into the SIM's own-number list; the modem then reports it (at/simnumber.js). */
+  async function writeToSim() {
+    const number = (ownNumber ?? '').trim();
+    numberBusy = 'sim';
+    try {
+      const run = await runOperation(() => api.simNumber(id, { number }));
+      numberConfirm = false;
+      if (run.status === 'done') numberNote = t('number.written', { number });
+      else if (/PIN2/i.test(run.error ?? '')) numberProblem = `${t('number.pin2')} (${run.error})`;
+      else numberProblem = run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain'));
+      await load();
+    } finally {
+      numberBusy = null;
+    }
+  }
+
   async function sendAt(/** @type {SubmitEvent} */ event) {
     event.preventDefault();
     if (atBusy) return;
@@ -466,7 +533,7 @@
           </div>
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('modem.number')}</dt>
-            <dd class="min-w-0 truncate tabular-nums">{orNone(shown.number)}</dd>
+            <dd class="min-w-0 truncate tabular-nums"><ModemNumber reported={shown.number} entered={shown.phone_number} /></dd>
           </div>
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('device.tty')}</dt>
@@ -494,22 +561,14 @@
             {/if}
           </div>
         {/if}
-        <!-- Quick actions: Start, Restart and Disable/Enable. Start is hidden while disabled (Enable brings the radio back,
-             and is the primary button then). Two per row on a phone, one row from `sm`. -->
+        <!-- Quick actions: Disable/Enable first, then Restart, and Start while the driver has the modem stopped (the only time
+             it does anything). Enable is the primary button of a disabled modem. Two per row on a phone, one row from `sm`. -->
         <div
           class="mt-3 grid grid-cols-2 gap-2 border-t border-slate-200 pt-3 *:px-2 [&>:last-child:nth-child(odd)]:col-span-2
             sm:flex sm:flex-wrap sm:*:px-4"
           role="group"
           aria-label={t('modem.quick_actions')}
         >
-          {#if shown.enabled}
-            <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={busy} onclick={() => act('start')}>
-              <ActionIcon name="start" />{t('modem.action_start')}
-            </button>
-          {/if}
-          <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={busy} onclick={() => act('restart')}>
-            <ActionIcon name="restart" />{t('modem.action_restart')}
-          </button>
           <button
             type="button"
             class="btn w-full sm:w-auto {shown.enabled ? 'btn-danger' : 'btn-primary'}"
@@ -519,6 +578,14 @@
             <ActionIcon name={shown.enabled ? 'disable' : 'enable'} />
             {toggling ? t('common.saving') : shown.enabled ? t('modem.action_disable') : t('modem.action_enable')}
           </button>
+          <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={busy} onclick={() => act('restart')}>
+            <ActionIcon name="restart" />{t('modem.action_restart')}
+          </button>
+          {#if shown.enabled && shown.state === 'stopped'}
+            <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={busy} onclick={() => act('start')}>
+              <ActionIcon name="start" />{t('modem.action_start')}
+            </button>
+          {/if}
         </div>
       </section>
 
@@ -658,6 +725,37 @@
               {/each}
             </div>
           {/if}
+        </form>
+      </Section>
+
+      <Section id="modem-number" title={t('number.title')} subtitle={t('number.hint')}>
+        <form class="flex flex-col gap-3" onsubmit={saveNumber} novalidate>
+          <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+            <p>{shown.number ? t('number.sim_reports', { number: shown.number }) : t('number.sim_silent')}</p>
+            {#if shown.phone_number}
+              <p class="text-slate-600">{t('number.entered', { number: shown.phone_number })}</p>
+            {/if}
+          </div>
+          <Field id="own-number" label={t('number.label')} hint={t('number.field_hint')}>
+            {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+              <input id="own-number" class="input tabular-nums" bind:value={ownNumber} inputmode="tel" autocomplete="off" placeholder="+1234567890" aria-describedby={field.describedBy} />
+            {/snippet}
+          </Field>
+          {#if numberProblem !== null}
+            <p class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-900" role="alert">{numberProblem}</p>
+          {/if}
+          {#if numberNote !== null}
+            <p class="text-sm text-slate-600" role="status">{numberNote}</p>
+          {/if}
+          <!-- Save is the main action; Save to SIM changes the card itself, so it asks first. Stacked on a phone. -->
+          <div class="flex flex-col gap-2 sm:flex-row">
+            <button type="submit" class="btn btn-primary w-full sm:w-auto" disabled={numberBusy !== null || !numberChanged}>
+              {numberBusy === 'save' ? t('common.saving') : t('number.save')}
+            </button>
+            <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={numberBusy !== null} onclick={askWriteToSim}>
+              {numberBusy === 'sim' ? t('common.working') : t('number.to_sim')}
+            </button>
+          </div>
         </form>
       </Section>
 
@@ -865,6 +963,15 @@
     </StickyActions>
   {/if}
 {/if}
+
+<Confirm
+  bind:open={numberConfirm}
+  title={t('number.confirm_title', { number: ownNumber ?? '' })}
+  text={t('number.confirm_text')}
+  confirmLabel={t('number.to_sim')}
+  busy={numberBusy === 'sim'}
+  onconfirm={writeToSim}
+/>
 
 <Confirm
   bind:open={confirming}
