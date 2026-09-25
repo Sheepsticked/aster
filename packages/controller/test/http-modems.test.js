@@ -2,7 +2,8 @@
 // Contract tests for the modem routes: the list, changes sent to registry-apply with the file's hash, refusals before
 // anything is enqueued, and device actions answered with 202 and their operation.
 import assert from 'node:assert/strict';
-import { chmodSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { describe, test } from 'node:test';
 import { uiState } from '../src/devices/state.js';
 import { harness, MODEM, REGISTRY, snapshot } from './http-harness.js';
@@ -57,6 +58,25 @@ describe('http modem routes', () => {
       chmodSync(h.paths.registry, 0o644);
       assert.equal(unreadable.statusCode, 500);
       assert.match(unreadable.json().error, /^the controller failed to answer: cannot read registry /);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('GET /api/modems/:id/driver-error answers the newest error the driver logged for the modem, or null', async () => {
+    const h = await harness();
+    try {
+      const { cookie } = await h.login();
+      const get = async (/** @type {string} */ id) => {
+        const response = await h.app.inject({ method: 'GET', url: `/api/modems/${id}/driver-error`, headers: { cookie } });
+        return [response.statusCode, response.json()];
+      };
+      assert.deepEqual(await get('gsm1'), [200, { modem_id: 'gsm1', error: null }], 'no log yet');
+      mkdirSync(dirname(h.paths.asteriskLog), { recursive: true });
+      writeFileSync(h.paths.asteriskLog, '[2026-09-24 19:12:36] ERROR[1296] at_response.c: [gsm1] Getting IMSI number failed\n');
+      assert.deepEqual(await get('gsm1'), [200, { modem_id: 'gsm1',
+        error: { at: Date.UTC(2026, 8, 24, 19, 12, 36), level: 'ERROR', text: 'Getting IMSI number failed', count: 1 } }]);
+      assert.equal((await get('gsm9'))[0], 404);
     } finally {
       await h.stop();
     }

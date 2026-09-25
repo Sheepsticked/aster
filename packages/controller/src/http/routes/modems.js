@@ -3,6 +3,7 @@
 // device actions (start, stop, AT, USSD, ...) answer 202 at once and are followed on /api/events.
 import { TIMED } from '../../at/forwarding.js';
 import { assignWithStarterPhones } from '../../config/starter.js';
+import { lastDriverError } from '../../logs/driver.js';
 import { start as startOp, applyRegistry, loadForChange } from '../ops.js';
 import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, update, ussd as ussdSchema,
   ussdCancel as ussdCancelSchema } from '../schemas/modems.js';
@@ -173,6 +174,18 @@ export function modemRoutes(app, ctx) {
       return reply.code(202).send({ operation });
     });
   }
+
+  // The newest error or warning the driver logged for this modem: why it does not connect, without opening the Logs page.
+  app.get('/api/modems/:id/driver-error', { schema: { params: idParam } }, async (request, reply) => {
+    const found = find(/** @type {any} */ (request.params).id, reply);
+    if (!found) return reply;
+    try {
+      return reply.send({ modem_id: found.modem.id, error: lastDriverError(ctx.paths.asteriskLog, found.modem.id) });
+    } catch (err) {
+      ctx.log.warn('the Asterisk log cannot be read for a driver error', { path: ctx.paths.asteriskLog, err });
+      return reply.code(503).send({ error: `the Asterisk log ${ctx.paths.asteriskLog} cannot be read` });
+    }
+  });
 
   // Forwarding: GET is what the last queries observed per condition (only a query writes it, never a mutation), POST runs the next one.
   app.get('/api/modems/:id/forwarding', { schema: { params: idParam } }, async (request, reply) => {

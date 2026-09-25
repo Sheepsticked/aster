@@ -117,6 +117,8 @@ export const api = {
   modemAction: (id, verb, body) => post(`/modems/${seg(id)}/${seg(verb)}`, body),
   /** @param {string} id */
   forwarding: (id) => get(`/modems/${seg(id)}/forwarding`),
+  /** The newest error or warning the driver logged for the modem, or `error: null`. @param {string} id */
+  driverError: (id) => get(`/modems/${seg(id)}/driver-error`),
   /** @param {string} id @param {{ action: string, number?: string }} body */
   runForwarding: (id, body) => post(`/modems/${seg(id)}/forwarding`, body),
   /** @param {string} id @param {{ command: string, timeout?: number }} body */

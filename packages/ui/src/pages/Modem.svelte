@@ -170,6 +170,31 @@
     return shown.driver_state === 'Radio off' ? { text: t('modem.radio_off'), pending: false } : { text: t('modem.radio_off_pending'), pending: true };
   });
 
+  /** The states in which a modem tries and fails; there the driver's last error says why. */
+  const FAILING = Object.freeze(['connecting', 'flapping', 'no-network', 'unverified']);
+  const failing = $derived(shown !== null && FAILING.includes(shown.state));
+  /** @type {{ at: number, level: string, text: string, count: number } | null} */
+  let driverError = $state(null);
+
+  // Read while the modem fails, and again every 20 s, so its age and count stay current.
+  $effect(() => {
+    if (!failing) {
+      driverError = null;
+      return undefined;
+    }
+    const modemId = id;
+    const read = async () => {
+      try {
+        driverError = (await api.driverError(modemId))?.error ?? null;
+      } catch {
+        driverError = null;
+      }
+    };
+    void read();
+    const timer = setInterval(read, 20_000);
+    return () => clearInterval(timer);
+  });
+
   /** What the registry would change to, as the fields the API takes; only what differs from the stored entry is sent. */
   const changes = $derived.by(() => {
     if (modem === null || form === null) return /** @type {Record<string, unknown>} */ ({});
@@ -460,6 +485,15 @@
             <dd>{shown.observed_at ? ago(shown.observed_at) : t('modem.never_seen')}</dd>
           </div>
         </dl>
+        {#if failing && driverError !== null}
+          <div id="modem-driver-error" class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <p class="font-medium">{t('modem.driver_error')} · {ago(driverError.at)}</p>
+            <p class="mt-1 break-words font-mono text-xs">{driverError.text}</p>
+            {#if driverError.count > 1}
+              <p class="mt-1 text-xs">{t('modem.driver_error_count', { n: driverError.count })}</p>
+            {/if}
+          </div>
+        {/if}
         <!-- Quick actions: Start, Restart and Disable/Enable. Start is hidden while disabled (Enable brings the radio back,
              and is the primary button then). Two per row on a phone, one row from `sm`. -->
         <div
