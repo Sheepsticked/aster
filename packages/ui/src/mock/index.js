@@ -30,6 +30,8 @@ const remembered = () => {
 /** @type {any} */
 const state = {
   in: remembered(),
+  /** Wrong passwords in a row; the fifth and later are refused like the controller's throttle (http/throttle.js). */
+  wrong: 0,
   ops: 40,
   devices: fixtures.unassigned(),
   modems: fixtures.modems(),
@@ -231,7 +233,12 @@ async function answer(method, path, body, query = new URLSearchParams()) {
   if (path === '/api/health') return json(fixtures.health({ summary: state.in }));
 
   if (path === '/api/login' && method === 'POST') {
-    if (typeof body?.password !== 'string' || body.password.length < MIN_PASSWORD) return error('wrong password', 401);
+    if (state.wrong >= 5) return json({ error: 'too many wrong passwords; try again in 600 s', retry_after: 600 }, 429);
+    if (typeof body?.password !== 'string' || body.password.length < MIN_PASSWORD) {
+      state.wrong += 1;
+      return error('wrong password', 401);
+    }
+    state.wrong = 0;
     state.in = true;
     remember(true);
     const now = Date.now();
@@ -361,7 +368,7 @@ async function answer(method, path, body, query = new URLSearchParams()) {
     if (method === 'GET') return json({ modems: state.modems.map(withForwarding), registry: { present: true, hash: state.settings.registry.hash } });
     if (method === 'POST') return modemPost(body);
   }
-  const modemPath = /^\/api\/modems\/([^/]+)(?:\/([a-z]+(?:\/cancel)?))?$/.exec(path);
+  const modemPath = /^\/api\/modems\/([^/]+)(?:\/([a-z-]+(?:\/cancel)?))?$/.exec(path);
   if (modemPath) return modemRoute(method, decodeURIComponent(modemPath[1]), modemPath[2] ?? null, body);
 
   if (path === '/api/connections' && method === 'GET') return json({ available: true, error: null, phones: fixtures.connections() });
@@ -586,6 +593,11 @@ function modemRoute(method, id, verb, body) {
     }
   }
 
+  if (method === 'GET' && verb === 'driver-error') {
+    // The flapping gsm2 fails the way a Huawei dongle without a SIM does, every 15 s.
+    const failing = id === 'gsm2';
+    return json({ modem_id: id, error: failing ? { at: Date.now() - 9_000, level: 'ERROR', text: 'Getting IMSI number failed', count: 240 } : null });
+  }
   if (method !== 'POST' && !(method === 'GET' && verb === 'forwarding')) return error(`unknown endpoint: ${method} /api/modems/${id}/${verb}`, 404);
 
   if (verb === 'forwarding') {

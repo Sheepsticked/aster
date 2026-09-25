@@ -4,6 +4,8 @@ import './app.css';
 import { mount } from 'svelte';
 import App from './App.svelte';
 import { language } from './i18n/index.js';
+// Applies the stored theme before the first paint.
+import './lib/theme.svelte.js';
 
 if (import.meta.env.VITE_MOCK === '1') {
   const { installMock } = await import('./mock/index.js');

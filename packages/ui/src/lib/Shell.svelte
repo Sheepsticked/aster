@@ -10,6 +10,7 @@
   import Toasts from './Toasts.svelte';
   import { live } from './live.svelte.js';
   import { session } from './session.svelte.js';
+  import { THEMES, theme } from './theme.svelte.js';
   import { toasts } from './toasts.svelte.js';
 
   /** @type {{ path: string, title: string, children: import('svelte').Snippet }} */
@@ -48,6 +49,11 @@
         <option value={code}>{t(`lang.${code}`)}</option>
       {/each}
     </select>
+    <select class="input" aria-label={t('theme.label')} value={theme.value} onchange={(event) => theme.set(event.currentTarget.value)}>
+      {#each THEMES as name (name)}
+        <option value={name}>{t(`theme.${name}`)}</option>
+      {/each}
+    </select>
     <button type="button" class="btn btn-plain w-full" onclick={() => session.logout()}>{t('nav.logout')}</button>
     {#if !live.connected}
       <p class="text-sm text-amber-700">{t('live.lost')}</p>
@@ -75,7 +81,7 @@
   </aside>
 
   <div class="flex min-w-0 flex-1 flex-col">
-    <header class="sticky top-0 z-30 flex items-center gap-1 bg-slate-900 px-2 text-white pt-safe md:hidden">
+    <header class="sticky top-0 z-30 flex items-center gap-1 bg-slate-900 px-2 text-white scheme-light pt-safe md:hidden">
       <button
         type="button"
         class="btn btn-ghost w-11 px-0 text-white hover:bg-white/10"

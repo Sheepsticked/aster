@@ -27,6 +27,7 @@
   "login.submit": "Sign in",
   "login.busy": "Signing in…",
   "login.wrong": "Wrong password",
+  "login.too_many": "Too many wrong passwords. Try again in {minutes} min.",
   "login.empty": "Enter the password",
 
   "health.title": "Health",
@@ -84,6 +85,8 @@
   "modem.rssi": "{dbm} dBm",
   "modem.ring": "Rings: {phones}",
   "modem.ring_none": "Rings nowhere",
+  "modem.driver_error": "Last driver error",
+  "modem.driver_error_count": "Seen {n} times in the recent log.",
   "modem.driver_state": "Driver state",
   "modem.radio": "Radio",
   "modem.radio_on": "On",
@@ -554,6 +557,10 @@
   "soon.title": "Not built yet",
   "soon.text": "This page arrives in a later milestone.",
 
+  "theme.label": "Theme",
+  "theme.system": "System theme",
+  "theme.light": "Light theme",
+  "theme.dark": "Dark theme",
   "lang.label": "Language",
   "lang.ru": "Русский",
   "lang.en": "English",

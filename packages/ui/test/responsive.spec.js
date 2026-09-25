@@ -98,6 +98,21 @@ test.describe('the login screen', () => {
     await noSidewaysScroll(page);
   });
 
+  test('says how long to wait once five wrong passwords hold the login, even for the right one', async ({ page }) => {
+    await page.goto('/');
+    const field = page.getByLabel(en['login.password']);
+    const submit = page.getByRole('button', { name: en['login.submit'] });
+    for (let i = 0; i < 5; i += 1) {
+      await field.fill('short');
+      await submit.click();
+      await expect(page.getByRole('alert')).toHaveText(en['login.wrong']);
+      await expect(field).toHaveValue('');
+    }
+    await field.fill(PASSWORD);
+    await submit.click();
+    await expect(page.getByRole('alert')).toHaveText(en['login.too_many'].replace('{minutes}', '10'));
+  });
+
   test('can be completed with the keyboard alone', async ({ page }, info) => {
     await page.goto('/');
     await page.screenshot({ path: `test-results/screens/${info.project.name}-login.png`, fullPage: true });
@@ -152,6 +167,57 @@ test.describe('every route', () => {
       });
     });
   }
+});
+
+/**
+ * How light an element's background is, 0 (black) to 1 (white): the colour is painted on a canvas, so any CSS colour syntax works.
+ * @param {import('@playwright/test').Locator} element
+ */
+const lightness = (element) => element.evaluate((node) => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const context = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
+  context.fillStyle = getComputedStyle(node).backgroundColor;
+  context.fillRect(0, 0, 1, 1);
+  const [r = 0, g = 0, b = 0] = context.getImageData(0, 0, 1, 1).data;
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+});
+
+test.describe('the theme', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await login(page);
+  });
+
+  test('follows the system\'s dark setting; Light and Dark pin one, kept after a reload', async ({ page }, info) => {
+    const body = page.locator('body');
+    expect(await lightness(body)).toBeLessThan(0.2);
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-overview-dark.png`, fullPage: true });
+
+    const menu = page.getByRole('button', { name: ru['nav.open_menu'] });
+    const choose = async (/** @type {string} */ value) => {
+      if (info.project.use.isMobile) await menu.tap();
+      await page.getByLabel(ru['theme.label']).filter({ visible: true }).selectOption(value);
+      if (info.project.use.isMobile) await page.keyboard.press('Escape');
+    };
+    await choose('light');
+    await expect.poll(() => lightness(body)).toBeGreaterThan(0.8);
+    await page.reload();
+    await expect(page.getByRole('heading', { name: ru['overview.modems'] })).toBeVisible();
+    await expect.poll(() => lightness(body)).toBeGreaterThan(0.8);
+    await choose('system');
+    await expect.poll(() => lightness(body)).toBeLessThan(0.2);
+  });
+
+  test('keeps the phone\'s top bar dark in the dark theme too', async ({ page }, info) => {
+    test.skip(!info.project.use.isMobile, 'the top bar is the phone layout');
+    const bar = page.locator('header').first();
+    expect(await lightness(bar)).toBeLessThan(0.2);
+    // Its text stays light, so the bar reads the same in both themes.
+    const title = await bar.locator('h1').evaluate((node) => getComputedStyle(node).color);
+    expect(title).toMatch(/255|oklch\(1 |#fff/);
+  });
 });
 
 test.describe('the navigation', () => {
@@ -366,6 +432,18 @@ test.describe('the modems page', () => {
 test.describe('the modem page', () => {
   test.beforeEach(async ({ page }) => {
     await login(page);
+  });
+
+  test('says why a failing modem does not connect with the driver\'s last error, and shows none for a working one', async ({ page }, info) => {
+    await page.goto('/modems/gsm2');
+    const box = page.locator('#modem-driver-error');
+    await expect(box.getByText(ru['modem.driver_error'], { exact: false })).toBeVisible();
+    await expect(box.getByText('Getting IMSI number failed')).toBeVisible();
+    await expect(box.getByText(ru['modem.driver_error_count'].replace('{n}', '240'))).toBeVisible();
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-modem-driver-error.png` });
+    await page.goto('/modems/gsm1');
+    await expect(page.getByText(ru['modem.signal'])).toBeVisible();
+    await expect(page.locator('#modem-driver-error')).toHaveCount(0);
   });
 
   test('shows forwarding only when the modem confirmed it', async ({ page }, info) => {

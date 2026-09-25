@@ -77,7 +77,7 @@
   onclick={click}
   aria-label={title}
   data-closing={closing || undefined}
-  class="m-0 max-h-none max-w-none bg-transparent p-0 backdrop:bg-slate-900/50 open:flex open:h-full open:w-full open:items-stretch {dialogClass}"
+  class="m-0 max-h-none max-w-none bg-transparent p-0 backdrop:bg-black/50 open:flex open:h-full open:w-full open:items-stretch {dialogClass}"
 >
   <div class="flex min-h-0 flex-col overflow-hidden bg-white shadow-xl {panelClass}" data-closing={closing || undefined}>
     <div class="flex items-start gap-3 border-b border-slate-200 px-4 py-3">

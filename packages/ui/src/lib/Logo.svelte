@@ -1,5 +1,5 @@
 <!-- The Aster mark, drawn inline (sized by class, no request); decorative, since the word is always beside it.
-     `dark` is the variant for a dark surface; colours are fixed brand colours. -->
+     `dark` is the variant for a surface that is dark in both themes; the other one follows the theme. -->
 <script>
   /** @type {{ dark?: boolean, class?: string }} */
   const { dark = false, class: className = 'h-6 w-6 shrink-0' } = $props();
@@ -14,6 +14,6 @@
   aria-hidden="true"
   focusable="false"
 >
-  <path d="M50 50 L50 8 M50 50 L13.6 71 M50 50 L86.4 71" stroke={dark ? '#ffffff' : '#0f172a'} />
-  <path d="M50 69 L50 92 M33.5 40.5 L13.6 29 M66.5 40.5 L86.4 29" stroke={dark ? '#38bdf8' : '#0ea5e9'} />
+  <path d="M50 50 L50 8 M50 50 L13.6 71 M50 50 L86.4 71" class={dark ? 'stroke-[#ffffff]' : 'stroke-slate-900'} />
+  <path d="M50 69 L50 92 M33.5 40.5 L13.6 29 M66.5 40.5 L86.4 29" class={dark ? 'stroke-[#38bdf8]' : 'stroke-sky-500'} />
 </svg>

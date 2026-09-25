@@ -115,7 +115,7 @@
   {/if}
 
   <!-- The only sideways-scrolling box; focusable for keyboard scrolling, and the tab panel of the strip above. -->
-  <div id="logs-output" role="tabpanel" aria-labelledby="tab-{tab}" tabindex="0" class="mt-2 max-h-[60dvh] overflow-auto rounded-lg bg-slate-900">
+  <div id="logs-output" role="tabpanel" aria-labelledby="tab-{tab}" tabindex="0" class="mt-2 max-h-[60dvh] overflow-auto rounded-lg bg-slate-900 scheme-light">
     <pre class="p-3 font-mono text-xs leading-5 text-slate-100 {wrap ? 'break-words whitespace-pre-wrap' : 'whitespace-pre'}">{text || (loading ? t('app.loading') : t('logs.empty'))}</pre>
   </div>
 </div>

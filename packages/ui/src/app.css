@@ -2,6 +2,71 @@
    >= 16 px so iOS does not zoom on focus. */
 @import 'tailwindcss';
 
+/* Dark mode: every colour the UI uses is light-dark(), so the page follows its color-scheme (the system's, or the choice
+   in lib/theme.svelte.js). Greys keep page, card and border apart; the colour families flip. Declared again on
+   .scheme-light, because a custom property resolves where it is declared: that keeps a surface light in both themes. */
+@layer base {
+  :root,
+  .scheme-light {
+    --color-white: light-dark(#fff, oklch(20.8% 0.042 265.755));
+    --color-slate-50: light-dark(oklch(98.4% 0.003 247.858), color-mix(in oklab, oklch(20.8% 0.042 265.755), oklch(12.9% 0.042 264.695)));
+    --color-slate-100: light-dark(oklch(96.8% 0.007 247.896), oklch(12.9% 0.042 264.695));
+    --color-slate-200: light-dark(oklch(92.9% 0.013 255.508), oklch(27.9% 0.041 260.031));
+    --color-slate-300: light-dark(oklch(86.9% 0.022 252.894), oklch(37.2% 0.044 257.287));
+    --color-slate-400: light-dark(oklch(70.4% 0.04 256.788), oklch(55.4% 0.046 257.417));
+    --color-slate-500: light-dark(oklch(55.4% 0.046 257.417), oklch(70.4% 0.04 256.788));
+    --color-slate-600: light-dark(oklch(44.6% 0.043 257.281), oklch(86.9% 0.022 252.894));
+    --color-slate-700: light-dark(oklch(37.2% 0.044 257.287), oklch(92.9% 0.013 255.508));
+    --color-slate-800: light-dark(oklch(27.9% 0.041 260.031), oklch(92.9% 0.013 255.508));
+    --color-slate-900: light-dark(oklch(20.8% 0.042 265.755), oklch(96.8% 0.007 247.896));
+    --color-slate-950: light-dark(oklch(12.9% 0.042 264.695), oklch(98.4% 0.003 247.858));
+    --color-sky-50: light-dark(oklch(97.7% 0.013 236.62), oklch(29.3% 0.066 243.157));
+    --color-sky-100: light-dark(oklch(95.1% 0.026 236.824), oklch(39.1% 0.09 240.876));
+    --color-sky-200: light-dark(oklch(90.1% 0.058 230.902), oklch(44.3% 0.11 240.79));
+    --color-sky-300: light-dark(oklch(82.8% 0.111 230.318), oklch(50% 0.134 242.749));
+    --color-sky-400: light-dark(oklch(74.6% 0.16 232.661), oklch(58.8% 0.158 241.966));
+    --color-sky-500: light-dark(oklch(68.5% 0.169 237.323), oklch(74.6% 0.16 232.661));
+    --color-sky-600: light-dark(oklch(58.8% 0.158 241.966), oklch(74.6% 0.16 232.661));
+    --color-sky-700: light-dark(oklch(50% 0.134 242.749), oklch(82.8% 0.111 230.318));
+    --color-sky-800: light-dark(oklch(44.3% 0.11 240.79), oklch(90.1% 0.058 230.902));
+    --color-sky-900: light-dark(oklch(39.1% 0.09 240.876), oklch(95.1% 0.026 236.824));
+    --color-sky-950: light-dark(oklch(29.3% 0.066 243.157), oklch(97.7% 0.013 236.62));
+    --color-rose-50: light-dark(oklch(96.9% 0.015 12.422), oklch(27.1% 0.105 12.094));
+    --color-rose-100: light-dark(oklch(94.1% 0.03 12.58), oklch(41% 0.159 10.272));
+    --color-rose-200: light-dark(oklch(89.2% 0.058 10.001), oklch(45.5% 0.188 13.697));
+    --color-rose-300: light-dark(oklch(81% 0.117 11.638), oklch(51.4% 0.222 16.935));
+    --color-rose-400: light-dark(oklch(71.2% 0.194 13.428), oklch(58.6% 0.253 17.585));
+    --color-rose-500: light-dark(oklch(64.5% 0.246 16.439), oklch(71.2% 0.194 13.428));
+    --color-rose-600: light-dark(oklch(58.6% 0.253 17.585), oklch(71.2% 0.194 13.428));
+    --color-rose-700: light-dark(oklch(51.4% 0.222 16.935), oklch(81% 0.117 11.638));
+    --color-rose-800: light-dark(oklch(45.5% 0.188 13.697), oklch(89.2% 0.058 10.001));
+    --color-rose-900: light-dark(oklch(41% 0.159 10.272), oklch(94.1% 0.03 12.58));
+    --color-rose-950: light-dark(oklch(27.1% 0.105 12.094), oklch(96.9% 0.015 12.422));
+    --color-amber-50: light-dark(oklch(98.7% 0.022 95.277), oklch(27.9% 0.077 45.635));
+    --color-amber-100: light-dark(oklch(96.2% 0.059 95.617), oklch(41.4% 0.112 45.904));
+    --color-amber-200: light-dark(oklch(92.4% 0.12 95.746), oklch(47.3% 0.137 46.201));
+    --color-amber-300: light-dark(oklch(87.9% 0.169 91.605), oklch(55.5% 0.163 48.998));
+    --color-amber-400: light-dark(oklch(82.8% 0.189 84.429), oklch(66.6% 0.179 58.318));
+    --color-amber-500: light-dark(oklch(76.9% 0.188 70.08), oklch(82.8% 0.189 84.429));
+    --color-amber-600: light-dark(oklch(66.6% 0.179 58.318), oklch(82.8% 0.189 84.429));
+    --color-amber-700: light-dark(oklch(55.5% 0.163 48.998), oklch(87.9% 0.169 91.605));
+    --color-amber-800: light-dark(oklch(47.3% 0.137 46.201), oklch(92.4% 0.12 95.746));
+    --color-amber-900: light-dark(oklch(41.4% 0.112 45.904), oklch(96.2% 0.059 95.617));
+    --color-amber-950: light-dark(oklch(27.9% 0.077 45.635), oklch(98.7% 0.022 95.277));
+    --color-emerald-50: light-dark(oklch(97.9% 0.021 166.113), oklch(26.2% 0.051 172.552));
+    --color-emerald-100: light-dark(oklch(95% 0.052 163.051), oklch(37.8% 0.077 168.94));
+    --color-emerald-200: light-dark(oklch(90.5% 0.093 164.15), oklch(43.2% 0.095 166.913));
+    --color-emerald-300: light-dark(oklch(84.5% 0.143 164.978), oklch(50.8% 0.118 165.612));
+    --color-emerald-400: light-dark(oklch(76.5% 0.177 163.223), oklch(59.6% 0.145 163.225));
+    --color-emerald-500: light-dark(oklch(69.6% 0.17 162.48), oklch(76.5% 0.177 163.223));
+    --color-emerald-600: light-dark(oklch(59.6% 0.145 163.225), oklch(76.5% 0.177 163.223));
+    --color-emerald-700: light-dark(oklch(50.8% 0.118 165.612), oklch(84.5% 0.143 164.978));
+    --color-emerald-800: light-dark(oklch(43.2% 0.095 166.913), oklch(90.5% 0.093 164.15));
+    --color-emerald-900: light-dark(oklch(37.8% 0.077 168.94), oklch(95% 0.052 163.051));
+    --color-emerald-950: light-dark(oklch(26.2% 0.051 172.552), oklch(97.9% 0.021 166.113));
+  }
+}
+
 @theme {
   --font-sans: ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
   --font-mono: ui-monospace, 'SFMono-Regular', 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -49,6 +114,13 @@
   html {
     /* Do not let the browser resize text on rotation. */
     -webkit-text-size-adjust: 100%;
+    color-scheme: light dark;
+  }
+  html[data-theme='light'] {
+    color-scheme: light;
+  }
+  html[data-theme='dark'] {
+    color-scheme: dark;
   }
 
   body {
