@@ -14,6 +14,8 @@ let error = $state(null);
 /** The HTTP status behind `error` (0 = no answer at all), so the login screen can say "wrong password" in the user's language
  *  instead of repeating the controller's English sentence (i18n/index.js). */
 let errorStatus = $state(0);
+/** Seconds a 429 says to wait before the next login, else null. */
+let retryAfter = $state(/** @type {number | null} */ (null));
 
 /** The appliance's language, once there is a session to read it with. */
 async function adoptLanguage() {
@@ -35,6 +37,9 @@ export const session = {
   /** The last failure of check()/login(), as the sentence to show. */
   get error() {
     return error;
+  },
+  get retryAfter() {
+    return retryAfter;
   },
   get errorStatus() {
     return errorStatus;
@@ -74,12 +79,15 @@ export const session = {
       status = 'in';
       error = null;
       errorStatus = 0;
+      retryAfter = null;
       await adoptLanguage();
       return true;
     } catch (err) {
       status = 'out';
       error = err instanceof Error ? err.message : String(err);
       errorStatus = err instanceof ApiError ? err.status : 0;
+      const seconds = err instanceof ApiError ? Number(err.body?.retry_after) : NaN;
+      retryAfter = errorStatus === 429 && Number.isFinite(seconds) && seconds > 0 ? seconds : null;
       return false;
     }
   },

@@ -125,6 +125,45 @@ describe('http auth routes', () => {
     }
   });
 
+  test('five wrong passwords hold an address for ten minutes, the right one included; other addresses and a right password reset nothing else', async () => {
+    let clock = Date.UTC(2026, 8, 24, 12, 0, 0);
+    const h = await harness({ now: () => clock });
+    try {
+      /** @param {string} password @param {string} [remoteAddress] */
+      const login = (password, remoteAddress = '192.0.2.10') =>
+        h.app.inject({ method: 'POST', url: '/api/login', payload: { password }, remoteAddress });
+      for (let i = 0; i < 4; i += 1) assert.equal((await login('not it')).statusCode, 401);
+      assert.equal((await login(PASSWORD)).statusCode, 200, 'four wrong ones do not hold the address');
+      for (let i = 0; i < 5; i += 1) assert.equal((await login('not it')).statusCode, 401, 'the right password started the count again');
+
+      const held = await login(PASSWORD);
+      assert.equal(held.statusCode, 429, 'held: not even the right password gets through');
+      assert.deepEqual([held.headers['retry-after'], held.json()], ['600', { error: 'too many wrong passwords; try again in 600 s', retry_after: 600 }]);
+      assert.equal(held.headers['set-cookie'], undefined);
+      assert.equal((await login(PASSWORD, '192.0.2.11')).statusCode, 200, 'another address is not held');
+
+      clock += 9 * 60_000;
+      const later = await login('not it');
+      assert.deepEqual([later.statusCode, later.json().retry_after], [429, 60], 'the wait counts down from the oldest wrong password');
+      clock += 60_000;
+      assert.equal((await login(PASSWORD)).statusCode, 200, 'ten minutes after the fifth wrong password the address may try again');
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('parallel guesses from one address: five are checked, the rest refused while those are still being verified', async () => {
+    const h = await harness();
+    try {
+      const answers = await Promise.all(Array.from({ length: 8 }, () =>
+        h.app.inject({ method: 'POST', url: '/api/login', payload: { password: 'not it' }, remoteAddress: '192.0.2.20' })));
+      const codes = answers.map((response) => response.statusCode).sort();
+      assert.deepEqual(codes, [401, 401, 401, 401, 401, 429, 429, 429]);
+    } finally {
+      await h.stop();
+    }
+  });
+
   test('a wrong password is 401 and creates nothing; a missing or unreadable hash is 503, never a login', async () => {
     const h = await harness();
     try {

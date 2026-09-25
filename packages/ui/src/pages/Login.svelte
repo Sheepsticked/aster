@@ -1,4 +1,5 @@
-<!-- Login screen: a 401 is shown as a translated "wrong password", other failures in the controller's words.
+<!-- Login screen: a 401 is shown as a translated "wrong password", a 429 as "too many" with the wait, other failures in
+     the controller's words.
      Also explains an expired session and shows the health strip. -->
 <script>
   import { onMount } from 'svelte';
@@ -19,9 +20,11 @@
       ? null
       : session.errorStatus === 401
         ? t('login.wrong')
-        : session.errorStatus === 0
-          ? t('error.network')
-          : session.error,
+        : session.errorStatus === 429
+          ? t('login.too_many', { minutes: Math.max(1, Math.ceil((session.retryAfter ?? 60) / 60)) })
+          : session.errorStatus === 0
+            ? t('error.network')
+            : session.error,
   );
 
   onMount(() => field?.focus());
