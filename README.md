@@ -66,6 +66,43 @@ it decided — the port, and which images the appliance runs — it writes to `.
   undo a change Asterisk rejected.
 - **English and Russian UI**, usable on a phone screen.
 
+## Screenshots
+
+![Overview: both modems ready, with signal, provider, number and the phones each one rings](docs/screenshots/overview.png)
+
+<details>
+<summary>More screens</summary>
+
+**Phones.** Each SIP phone with its live connection, the modem it dials out through and the modems that ring it.
+
+![Phones](docs/screenshots/phones.png)
+
+**Messages.** SMS in and out with delivery status; send, retry and delete from the page.
+
+![Messages](docs/screenshots/messages.png)
+
+**Calls.** The call history and the talk time per SIM for this month and last.
+
+![Calls](docs/screenshots/calls.png)
+
+**Modem.** Call forwarding as the modem itself reports it, and USSD codes without a terminal.
+
+![Modem: call forwarding and USSD](docs/screenshots/modem.png)
+
+**Telegram.** What the appliance sent to Telegram: incoming SMS and missed calls.
+
+![Notifications sent to Telegram](docs/screenshots/notifications.png)
+
+**Dark theme and phone layout.**
+
+![Calls page in the dark theme](docs/screenshots/dark-mode.png)
+
+![Overview, Messages and Calls on a phone screen](docs/screenshots/phone-layout.png)
+
+</details>
+
+The screenshots show made-up data (example numbers and provider names).
+
 ## Supported modems
 
 Tested on a Raspberry Pi 5 with:
