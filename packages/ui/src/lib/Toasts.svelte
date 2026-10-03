@@ -1,4 +1,4 @@
-<!-- The toast stack at the bottom of the screen; below `md` it sits above a floating action bar (`--sticky-actions`).
+<!-- The toast stack at the top of the screen, clear of the bottom action bar; below `md` it sits under the page header.
      aria-live="polite" announces toasts without moving focus. -->
 <script>
   import { t } from '../i18n/index.js';
@@ -13,8 +13,8 @@
 </script>
 
 <div
-  class="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex flex-col items-center gap-2 px-4 pb-safe sm:items-end
-    max-md:bottom-[var(--sticky-actions,0px)]"
+  class="pointer-events-none fixed inset-x-0 top-0 z-40 flex flex-col items-center gap-2 px-4 pt-[calc(env(safe-area-inset-top,0px)+4.5rem)]
+    sm:items-end md:pt-4"
   aria-live="polite"
   aria-atomic="false"
 >

@@ -1254,6 +1254,10 @@ test.describe('the phone layout', () => {
     const over = await box(toast);
     const under = await box(bar);
     expect(over.y + over.height <= under.y + 1 || over.y >= under.y + under.height - 1, 'the toast covers the Save bar').toBe(true);
+    // The toast sits at the top, under the page header, so it never hides the menu button.
+    const header = await box(page.locator('header').first());
+    expect(over.y, 'the toast covers the header').toBeGreaterThanOrEqual(header.y + header.height - 1);
+    expect(over.y + over.height).toBeLessThan(under.y);
   });
 
   test('cuts neither a section’s hint, a file’s name nor a checkbox', async ({ page }) => {
