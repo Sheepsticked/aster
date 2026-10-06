@@ -235,6 +235,9 @@
   });
 
   const dirty = $derived(Object.keys(changes).length > 0);
+  /** Which block holds the pending edits: the Telegram recipients have a block of their own. */
+  const telegramDirty = $derived('recipients' in changes);
+  const settingsDirty = $derived(Object.keys(changes).some((key) => key !== 'recipients'));
 
   /** Client-side checks for early feedback beside each field. */
   function check() {
@@ -266,6 +269,8 @@
     } catch (err) {
       problems = problemsOf(err);
       refused = messageOf(err);
+      // The Save may have been pressed in a block far from the form's own message.
+      toasts.push({ kind: 'error', text: refused });
     } finally {
       saving = false;
     }
@@ -499,6 +504,14 @@
   });
 </script>
 
+{#snippet unsavedBadge()}
+  <!-- only the dot below `sm`, so the section's hint keeps its width on a phone -->
+  <span class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-amber-100 p-2 text-sm font-medium text-amber-900 ring-1 ring-amber-300 ring-inset sm:px-2.5 sm:py-1">
+    <span class="h-2 w-2 rounded-full bg-amber-500" aria-hidden="true"></span>
+    <span class="sr-only sm:not-sr-only">{t('common.unsaved_badge')}</span>
+  </span>
+{/snippet}
+
 {#if missing}
   <section class="card p-6">
     <h1 class="text-xl font-semibold">{t('modem.not_found')}</h1>
@@ -590,6 +603,9 @@
       </section>
 
       <Section id="modem-settings" title={t('modem.settings')} subtitle={t('modem.settings_hint')}>
+        {#snippet aside()}
+          {#if settingsDirty}{@render unsavedBadge()}{/if}
+        {/snippet}
         <form id="modem-form" class="flex flex-col gap-4" onsubmit={save} novalidate>
           {#if refused !== null}
             <p class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-900" role="alert">{refused}</p>
@@ -703,29 +719,50 @@
             {#each problemsFor(problems, 'uac') as problem (problem.message)}
               <p class="-mt-2 text-sm text-rose-800">{problem.message}</p>
             {/each}
+          {/if}
+        </form>
+      </Section>
 
+      <Section id="modem-telegram" title={t('modem.telegram')} subtitle={t('modem.telegram_hint')}>
+        {#snippet aside()}
+          {#if telegramDirty}{@render unsavedBadge()}{/if}
+        {/snippet}
+        {#if form !== null}
+          <div class="flex flex-col gap-3">
             <div>
               <label class="flex min-h-11 items-center gap-3">
                 <input type="checkbox" class="h-5 w-5" bind:checked={form.ownRecipients} />
                 <span>{t('modem.own_recipients')}</span>
               </label>
-              <p class="mb-2 text-sm text-slate-500">{t('modem.recipients_hint')}</p>
-              {#if form.ownRecipients}
-                <ChipList
-                  id="modem-recipients"
-                  items={form.recipients}
-                  pattern={/^-?[0-9]{1,20}$/}
-                  inputmode="numeric"
-                  placeholder={t('settings.chat_id')}
-                  onchange={(items) => (form.recipients = items)}
-                />
-              {/if}
-              {#each problemsFor(problems, 'recipients') as problem (problem.message)}
-                <p class="mt-1 text-sm text-rose-800">{problem.message}</p>
-              {/each}
+              <p class="text-sm text-slate-500">{t('modem.recipients_hint')}</p>
             </div>
-          {/if}
-        </form>
+            {#if form.ownRecipients}
+              <ChipList
+                id="modem-recipients"
+                items={form.recipients}
+                pattern={/^-?[0-9]{1,20}$/}
+                inputmode="numeric"
+                placeholder={t('settings.chat_id')}
+                onchange={(items) => (form.recipients = items)}
+              />
+              {#if form.recipients.length === 0}
+                <p class="text-sm text-amber-800">{t('modem.telegram_nobody')}</p>
+              {/if}
+            {/if}
+            {#each problemsFor(problems, 'recipients') as problem (problem.message)}
+              <p class="text-sm text-rose-800">{problem.message}</p>
+            {/each}
+            <!-- The chip list's Add only changes the page; this is where the edit is written down. -->
+            {#if telegramDirty}
+              <div class="flex flex-col gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between" role="status">
+                <span>{t('modem.telegram_unsaved')}</span>
+                <button type="submit" form="modem-form" class="btn btn-primary w-full sm:w-auto" disabled={saving}>
+                  {saving ? t('common.saving') : t('common.save')}
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
       </Section>
 
       <Section id="modem-number" title={t('number.title')} subtitle={t('number.hint')}>
@@ -955,8 +992,8 @@
       </Section>
     </div>
 
-    <StickyActions floating={dirty}>
-      <button type="button" class="btn btn-danger mr-auto" onclick={() => (confirming = true)}>{t('modem.delete')}</button>
+    <StickyActions unsaved={dirty}>
+      <button type="button" class="btn btn-danger mr-auto md:order-first" onclick={() => (confirming = true)}>{t('modem.delete')}</button>
       <button type="submit" form="modem-form" class="btn btn-primary" disabled={saving || !dirty}>
         {saving ? t('common.saving') : dirty ? t('common.save') : t('common.saved')}
       </button>

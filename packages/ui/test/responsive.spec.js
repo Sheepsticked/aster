@@ -379,6 +379,22 @@ test.describe('the overview', () => {
       .toHaveAttribute('href', '/modems?assign=1-3');
   });
 
+  test('opens a modem from anywhere on its card', async ({ page }) => {
+    const card = page.getByRole('listitem').filter({ has: page.getByRole('link', { name: 'gsm1', exact: true }) });
+    // The id is the card's one link, and it is stretched over the card.
+    await expect(card.getByRole('link')).toHaveCount(1);
+    // Forced, because the link over the card is what takes the click, as it does for a finger.
+    await card.getByText(ru['modem.provider'], { exact: true }).click({ force: true });
+    await expect(page).toHaveURL(/\/modems\/gsm1$/);
+    await expect(page.getByRole('heading', { name: 'gsm1', exact: true })).toBeVisible();
+    // Back to the list, and by keyboard this time.
+    await page.goBack();
+    await expect(page.getByRole('heading', { name: ru['overview.modems'] })).toBeVisible();
+    await page.getByRole('link', { name: 'gsm2', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/\/modems\/gsm2$/);
+  });
+
   test('starts a scan and shows what the event stream reports', async ({ page }) => {
     await page.getByRole('button', { name: ru['overview.scan'] }).click();
     await expect(page.getByText(ru['overview.scan_started'])).toBeVisible();
@@ -668,12 +684,65 @@ test.describe('the modem page', () => {
     await expect(settings.getByLabel(ru['modem.ring_timeout'], { exact: true })).toHaveValue('90');
   });
 
-  test('drops the edits of one modem when the health strip opens another', async ({ page }) => {
+  test('keeps the Telegram recipients in a block of their own, and says they are not saved until Save', async ({ page }, info) => {
     await page.goto('/modems/gsm1');
     const settings = await openSection(page, 'modem-settings');
-    await settings.getByLabel(ru['modem.own_recipients'], { exact: true }).check();
-    await settings.locator('#modem-recipients').fill('555000111');
-    await expect(page.getByRole('button', { name: ru['common.save'], exact: true })).toBeEnabled();
+    // The recipients have a block of their own, not a place among the settings.
+    await expect(settings.getByLabel(ru['modem.own_recipients'], { exact: true })).toHaveCount(0);
+    const telegram = await openSection(page, 'modem-telegram');
+    await expect(telegram.getByRole('button', { name: ru['common.save'], exact: true })).toHaveCount(0);
+
+    await telegram.getByLabel(ru['modem.own_recipients'], { exact: true }).check();
+    await expect(telegram.getByText(ru['modem.telegram_nobody'])).toBeVisible();
+    await telegram.locator('#modem-recipients').fill('555000111');
+    await telegram.getByRole('button', { name: ru['list.add'], exact: true }).click();
+    await expect(telegram.getByText(ru['modem.telegram_nobody'])).toHaveCount(0);
+    // Added to the list on the page, not yet to the modem: the block, its header and the bar all say so.
+    await expect(telegram.getByText(ru['modem.telegram_unsaved'])).toBeVisible();
+    await expect(telegram.locator('summary').getByText(ru['common.unsaved_badge'])).toBeVisible();
+    await expect(settings.locator('summary').getByText(ru['common.unsaved_badge'])).toHaveCount(0);
+    await expect(page.getByText(ru['common.unsaved'], { exact: true })).toBeVisible();
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-modem-telegram-unsaved.png`, fullPage: true });
+
+    await telegram.getByRole('button', { name: ru['common.save'], exact: true }).click();
+    await expect(page.getByText(ru['modem.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(telegram.getByText(ru['modem.telegram_unsaved'])).toHaveCount(0);
+    await expect(page.getByText(ru['common.unsaved'], { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
+    await expect(telegram.getByRole('button', { name: ru['list.remove'].replace('{item}', '555000111') })).toBeVisible();
+  });
+
+  test('highlights the Save bar and keeps it on screen at the foot of a long page while there is something to save', async ({ page }, info) => {
+    await page.goto('/modems/gsm1');
+    const settings = await openSection(page, 'modem-settings');
+    await expect(page.getByText(ru['common.unsaved'], { exact: true })).toHaveCount(0);
+    await settings.getByLabel(ru['modem.ring_timeout'], { exact: true }).fill('90');
+    await expect(settings.locator('summary').getByText(ru['common.unsaved_badge'])).toBeVisible();
+    const note = page.getByText(ru['common.unsaved'], { exact: true });
+    await expect(note).toBeVisible();
+    const save = page.getByRole('button', { name: ru['common.save'], exact: true });
+    const bar = save.locator('..');
+    await expect(bar).toHaveCSS('position', 'sticky');
+
+    // Scrolled to the top of the page, the bar is still in view: the Save button is never a long way down.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const viewport = /** @type {{ height: number }} */ (page.viewportSize());
+    const at = /** @type {{ y: number, height: number }} */ (await save.boundingBox());
+    expect(at.y + at.height, 'Save is below the screen').toBeLessThanOrEqual(viewport.height);
+    expect(at.y, 'Save is above the screen').toBeGreaterThanOrEqual(0);
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-modem-unsaved-bar.png` });
+    // Delete stays at the left of the bar, away from Save.
+    const remove = await (await page.getByRole('button', { name: ru['modem.delete'], exact: true })).boundingBox();
+    expect(/** @type {{ x: number }} */ (remove).x).toBeLessThan(/** @type {{ x: number }} */ (await save.boundingBox()).x);
+  });
+
+  test('drops the edits of one modem when the health strip opens another', async ({ page }) => {
+    await page.goto('/modems/gsm1');
+    const telegram = await openSection(page, 'modem-telegram');
+    await telegram.getByLabel(ru['modem.own_recipients'], { exact: true }).check();
+    await telegram.locator('#modem-recipients').fill('555000111');
+    // Two Save buttons while the recipients are pending: the one in their block and the bar's, the last on the page.
+    await expect(page.getByRole('button', { name: ru['common.save'], exact: true }).last()).toBeEnabled();
 
     // Same route, another id: the page must be gsm2's, not gsm1's form saved onto gsm2.
     await page.getByRole('button', { name: new RegExp(ru['health.degraded']) }).click();
@@ -681,7 +750,7 @@ test.describe('the modem page', () => {
     await expect(page).toHaveURL(/\/modems\/gsm2$/);
     const other = await openSection(page, 'modem-settings');
     await expect(other.getByLabel(ru['device.imei'], { exact: true })).toHaveValue('356938031234560');
-    await expect(other.getByLabel(ru['modem.own_recipients'], { exact: true })).not.toBeChecked();
+    await expect((await openSection(page, 'modem-telegram')).getByLabel(ru['modem.own_recipients'], { exact: true })).not.toBeChecked();
     await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
   });
 });

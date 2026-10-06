@@ -276,9 +276,9 @@
 </div>
 
 {#if file !== null && file.editable}
-  <StickyActions floating={dirty}>
+  <StickyActions unsaved={dirty}>
     {#if file.restorable}
-      <button type="button" class="btn btn-plain mr-auto" disabled={busy} onclick={restore}>{t('config.restore')}</button>
+      <button type="button" class="btn btn-plain mr-auto md:order-first" disabled={busy} onclick={restore}>{t('config.restore')}</button>
     {/if}
     <button type="button" class="btn btn-primary" disabled={busy || !dirty} onclick={() => apply()}>
       {busy ? t('config.applying') : dirty ? t('config.apply') : t('config.applied_short')}

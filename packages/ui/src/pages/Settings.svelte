@@ -408,7 +408,7 @@
     </Section>
   </div>
 
-  <StickyActions floating={dirty}>
+  <StickyActions unsaved={dirty}>
     <button type="submit" form="settings-form" class="btn btn-primary" disabled={saving || !dirty}>
       {saving ? t('common.saving') : dirty ? t('common.save') : t('common.saved')}
     </button>

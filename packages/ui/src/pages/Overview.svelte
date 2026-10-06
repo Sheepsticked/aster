@@ -1,5 +1,5 @@
 <!-- Overview: modem cards and unassigned devices from GET /api/overview. Live `modem.state` events merge into the cards;
-     missed events trigger a refetch. Read-only: Assign links to the Modems page. -->
+     missed events trigger a refetch. Read-only: a card opens its modem, Assign links to the Modems page. -->
 <script>
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
@@ -95,10 +95,19 @@
   {:else}
     <ul class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
       {#each modems as modem (modem.id)}
-        <li class="card flex flex-col gap-3 p-4">
+        <!-- The id is the card's one link; its ::after stretches over the card, so the whole card opens the modem. -->
+        <li
+          class="card relative flex flex-col gap-3 p-4 transition-colors hover:bg-slate-50
+            has-[a:focus-visible]:outline-2 has-[a:focus-visible]:outline-offset-2 has-[a:focus-visible]:outline-sky-600"
+        >
           <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
             <div class="min-w-0">
-              <p class="truncate text-base font-semibold">{modem.id}</p>
+              <a
+                class="block truncate text-base font-semibold text-sky-800 outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] hover:underline"
+                href="/modems/{encodeURIComponent(modem.id)}"
+              >
+                {modem.id}
+              </a>
               <p class="truncate text-sm text-slate-500">{modem.driver}</p>
             </div>
             <StateBadge state={modem.state} />
