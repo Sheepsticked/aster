@@ -419,6 +419,7 @@
       numberConfirm = false;
       if (run.status === 'done') numberNote = t('number.written', { number });
       else if (/PIN2/i.test(run.error ?? '')) numberProblem = `${t('number.pin2')} (${run.error})`;
+      else if (run.result?.reason === 'no-own-list') numberProblem = `${t('number.no_list')} (${run.error})`;
       else numberProblem = run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain'));
       await load();
     } finally {

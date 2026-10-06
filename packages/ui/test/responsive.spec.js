@@ -546,6 +546,12 @@ test.describe('the modem page', () => {
     await expect(box.getByRole('alert')).toContainText(ru['number.pin2'], { timeout: 15_000 });
     await expect(box.getByRole('alert')).toContainText('SIM PIN2 required');
 
+    await field.fill('+9981234567');
+    await toSim.click();
+    await dialog.getByRole('button', { name: ru['number.to_sim'] }).click();
+    await expect(box.getByRole('alert')).toContainText(ru['number.no_list'], { timeout: 15_000 });
+    await expect(box.getByRole('alert')).toContainText('does not offer the SIM');
+
     await page.goto('/modems/gsm2');
     const missing = await openSection(page, 'modem-number');
     await missing.getByLabel(ru['number.label']).fill('+1234567891');

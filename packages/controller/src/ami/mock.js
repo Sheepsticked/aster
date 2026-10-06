@@ -416,6 +416,8 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
       const book = phonebook(device.name);
       if (upper.startsWith('AT+CSQ')) lines = ['+CSQ: 21,99'];
       else if (upper === 'AT+CPBS?') lines = [book.storage === 'ON' ? `+CPBS: "ON",${book.own === null ? 0 : 1},2` : `+CPBS: "${book.storage}",0,250`];
+      else if (upper === 'AT+CPBS=?') lines = ['+CPBS: ("SM","DC","MC","ME","RC","EN","ON")'];
+      else if (upper === 'AT+CPIN?') lines = ['+CPIN: READY'];
       else if (upper.startsWith('AT+CPBS=')) {
         const storage = /^AT\+CPBS="(SM|ON|ME|FD|DC|MC|RC|EN)"$/.exec(upper)?.[1];
         if (storage) book.storage = storage;

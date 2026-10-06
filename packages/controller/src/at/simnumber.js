@@ -22,6 +22,8 @@ export const KIND = 'sim-number';
 export { NUMBER };
 export const QUERY_STORAGE = 'AT+CPBS?';
 export const READ_ENTRY = 'AT+CPBR=1';
+export const LIST_STORAGES = 'AT+CPBS=?';
+export const SIM_STATUS = 'AT+CPIN?';
 export const OWN_NUMBERS = 'AT+CNUM';
 /** The phonebook a modem selects after a restart, used when AT+CPBS? names none. */
 export const DEFAULT_STORAGE = 'SM';
@@ -42,6 +44,32 @@ export function storageOf(lines) {
   for (const line of lines) {
     const match = /^\+CPBS:\s*"([A-Z]{2})"/.exec(line.trim());
     if (match) return match[1] ?? null;
+  }
+  return null;
+}
+
+/**
+ * The phonebooks an AT+CPBS=? answer offers (`+CPBS: ("SM","DC","ON")`), or null when it names none.
+ * @param {readonly string[]} lines
+ */
+export function offeredStorages(lines) {
+  for (const line of lines) {
+    const match = /^\+CPBS:\s*\(([^)]*)\)/.exec(line.trim());
+    if (!match) continue;
+    const names = [...(match[1] ?? '').matchAll(/"([A-Z]{2})"/g)].map((name) => name[1] ?? '');
+    return names.length > 0 ? names : null;
+  }
+  return null;
+}
+
+/**
+ * The state an AT+CPIN? answer names (`+CPIN: READY`, `+CPIN: SIM PIN`), or null.
+ * @param {readonly string[]} lines
+ */
+export function simStatus(lines) {
+  for (const line of lines) {
+    const match = /^\+CPIN:\s*(\S.*)$/.exec(line.trim());
+    if (match) return match[1]?.trim() ?? null;
   }
   return null;
 }
@@ -92,8 +120,9 @@ export function createSimNumberOps({ registry, log = SILENT, now = Date.now, tim
     const number = params.number;
     const driver = modemDriver(registry, modemId, params);
     const ami = requireAmi(ctx, 'nothing was written to the SIM');
-    /** @type {{ modem_id: string, driver: string, number: string, storage: string | null, read_back: string | null, reported: string[], restored: boolean, transactions: Transaction[] }} */
-    const result = { modem_id: modemId, driver, number, storage: null, read_back: null, reported: [], restored: false, transactions: [] };
+    /** @type {{ modem_id: string, driver: string, number: string, storage: string | null, read_back: string | null, reported: string[], restored: boolean,
+     *  offered: string[] | null, sim_state: string | null, reason: 'no-own-list' | 'sim-not-ready' | null, transactions: Transaction[] }} */
+    const result = { modem_id: modemId, driver, number, storage: null, read_back: null, reported: [], restored: false, offered: null, sim_state: null, reason: null, transactions: [] };
     const common = { driver, device: modemId, timeoutS: t.timeoutS, graceMs: t.graceMs, actionTimeoutMs: t.actionTimeoutMs, log: ctx.log, now };
     /** @param {string} command */
     const step = async (command) => {
@@ -111,8 +140,26 @@ export function createSimNumberOps({ registry, log = SILENT, now = Date.now, tim
     result.storage = storageOf(current.lines) ?? DEFAULT_STORAGE;
     const select = await step(selectCommand('ON'));
     if (select.outcome !== 'OK') {
-      const why = select.outcome === 'ERROR' ? 'the modem cannot select the SIM\'s own-number list' : String(select.error);
-      throw new OperationError(`${selectCommand('ON')}: ${why}${select.outcome === 'ERROR' ? ` (${select.error})` : ''}; nothing was written to the SIM`, { status: 'failed', result: done() });
+      let why = String(select.error);
+      if (select.outcome === 'ERROR') {
+        // The driver turns verbose errors off, so the bare ERROR is explained from what the modem says about the SIM.
+        const state = await step(SIM_STATUS);
+        if (state.outcome === 'OK') result.sim_state = simStatus(state.lines);
+        if (answering()) {
+          const list = await step(LIST_STORAGES);
+          if (list.outcome === 'OK') result.offered = offeredStorages(list.lines);
+        }
+        if (result.sim_state !== null && result.sim_state !== 'READY') {
+          result.reason = 'sim-not-ready';
+          why = `the SIM is not ready (+CPIN: ${result.sim_state})`;
+        } else {
+          result.reason = 'no-own-list';
+          why = result.offered !== null && !result.offered.includes('ON')
+            ? `the modem does not offer the SIM's own-number list (it offers ${result.offered.join(', ')})`
+            : `the modem cannot select the SIM's own-number list (${select.error})`;
+        }
+      }
+      throw new OperationError(`${selectCommand('ON')}: ${why}; nothing was written to the SIM`, { status: 'failed', result: done() });
     }
     const write = await step(writeCommand(number));
     if (write.outcome === 'OK') {

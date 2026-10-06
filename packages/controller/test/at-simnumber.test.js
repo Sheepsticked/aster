@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
-import { createSimNumberOps, entryNumber, ownNumbers, selectCommand, storageOf, writeCommand } from '../src/at/simnumber.js';
+import { createSimNumberOps, entryNumber, offeredStorages, ownNumbers, selectCommand, simStatus, storageOf, writeCommand } from '../src/at/simnumber.js';
 import { createBus } from '../src/bus.js';
 import { validate } from '../src/config/registry.js';
 import { createRunner } from '../src/ops/runner.js';
@@ -38,6 +38,8 @@ function harness({ storage = 'SM', locked = false, connected = true } = {}) {
   ami.at = (_device, command) => {
     if (overrides[command]) return overrides[command];
     if (command === 'AT+CPBS?') return { lines: [`+CPBS: "${sim.storage}",1,250`] };
+    if (command === 'AT+CPBS=?') return { lines: ['+CPBS: ("SM","DC","MC","ME","RC","EN","ON")'] };
+    if (command === 'AT+CPIN?') return { lines: ['+CPIN: READY'] };
     const select = /^AT\+CPBS="([A-Z]{2})"$/.exec(command);
     if (select) {
       sim.storage = select[1] ?? sim.storage;
@@ -71,6 +73,12 @@ describe('at sim-number', () => {
     assert.equal(storageOf(['OK']), null);
     assert.equal(entryNumber([`+CPBR: 1,"${NUM}",145,""`]), NUM);
     assert.equal(entryNumber([`+CPBR: 2,"${NUM}",145,""`]), null, 'only entry 1');
+    assert.deepEqual(offeredStorages(['+CPBS: ("SM","DC","ON")']), ['SM', 'DC', 'ON']);
+    assert.equal(offeredStorages(['+CPBS: "SM",1,250']), null, 'the answer to AT+CPBS?, not to AT+CPBS=?');
+    assert.equal(offeredStorages(['+CPBS: ()']), null);
+    assert.equal(simStatus(['+CPIN: READY']), 'READY');
+    assert.equal(simStatus(['+CPIN: SIM PIN']), 'SIM PIN');
+    assert.equal(simStatus(['OK']), null);
     assert.deepEqual(ownNumbers([`+CNUM: ,"${NUM}",145`]), [NUM]);
     assert.deepEqual(ownNumbers([`+CNUM: "Subscriber Number","${NUM}",145`]), [NUM]);
     assert.deepEqual(ownNumbers(['+CNUM: "Subscriber Number","",145', '+CNUM: "Subscriber Number",,145']), [], 'empty entries are left out');
@@ -118,15 +126,75 @@ describe('at sim-number', () => {
     }
   });
 
-  test('a modem without an own-number list: failed after the select, nothing written', async () => {
+  test('a select the modem refuses although it offers the list: failed with the modem\'s error, nothing written', async () => {
     const h = harness();
-    h.overrides['AT+CPBS="ON"'] = { result: 'ERROR', error: '+CME ERROR: operation not supported' };
+    h.overrides['AT+CPBS="ON"'] = { result: 'ERROR', error: 'ERROR' };
     try {
       const op = await h.run({ number: NUM });
       assert.equal(op.status, 'failed');
-      assert.match(op.error ?? '', /^AT\+CPBS="ON": the modem cannot select the SIM's own-number list \(\+CME ERROR: operation not supported\); nothing was written/);
-      assert.deepEqual(h.commands(), ['AT+CPBS?', 'AT+CPBS="ON"']);
+      assert.equal(op.error, 'AT+CPBS="ON": the modem cannot select the SIM\'s own-number list (ERROR); nothing was written to the SIM');
+      assert.deepEqual(h.commands(), ['AT+CPBS?', 'AT+CPBS="ON"', 'AT+CPIN?', 'AT+CPBS=?']);
       assert.equal(h.sim.own, null);
+      const result = /** @type {any} */ (op.result);
+      assert.deepEqual([result.reason, result.sim_state, result.offered?.includes('ON')], ['no-own-list', 'READY', true]);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('a modem that does not offer the own-number list says which phonebooks it offers', async () => {
+    const h = harness();
+    h.overrides['AT+CPBS="ON"'] = { result: 'ERROR', error: 'ERROR' };
+    h.overrides['AT+CPBS=?'] = { lines: ['+CPBS: ("SM","DC","MC","ME","RC","EN")'] };
+    try {
+      const op = await h.run({ number: NUM });
+      assert.equal(op.status, 'failed');
+      assert.equal(op.error, 'AT+CPBS="ON": the modem does not offer the SIM\'s own-number list (it offers SM, DC, MC, ME, RC, EN); nothing was written to the SIM');
+      assert.deepEqual(/** @type {any} */ (op.result).offered, ['SM', 'DC', 'MC', 'ME', 'RC', 'EN']);
+      assert.equal(/** @type {any} */ (op.result).reason, 'no-own-list');
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('a SIM that is not ready is named as the reason for a refused select', async () => {
+    const h = harness();
+    h.overrides['AT+CPBS="ON"'] = { result: 'ERROR', error: 'ERROR' };
+    h.overrides['AT+CPIN?'] = { lines: ['+CPIN: SIM PIN'] };
+    try {
+      const op = await h.run({ number: NUM });
+      assert.equal(op.status, 'failed');
+      assert.equal(op.error, 'AT+CPBS="ON": the SIM is not ready (+CPIN: SIM PIN); nothing was written to the SIM');
+      assert.equal(/** @type {any} */ (op.result).reason, 'sim-not-ready');
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('questions the modem does not answer leave the refusal as it was', async () => {
+    const h = harness();
+    h.overrides['AT+CPBS="ON"'] = { result: 'ERROR', error: '+CME ERROR: operation not supported' };
+    h.overrides['AT+CPIN?'] = { result: 'ERROR', error: 'ERROR' };
+    h.overrides['AT+CPBS=?'] = { result: 'ERROR', error: 'ERROR' };
+    try {
+      const op = await h.run({ number: NUM });
+      assert.equal(op.status, 'failed');
+      assert.equal(op.error, 'AT+CPBS="ON": the modem cannot select the SIM\'s own-number list (+CME ERROR: operation not supported); nothing was written to the SIM');
+      assert.deepEqual(/** @type {any} */ (op.result).offered, null);
+    } finally {
+      await h.stop();
+    }
+  });
+
+  test('a select without a verdict sends nothing more to the modem that went quiet', async () => {
+    const h = harness();
+    h.overrides['AT+CPBS="ON"'] = { result: 'silent' };
+    try {
+      const op = await h.run({ number: NUM });
+      assert.equal(op.status, 'failed');
+      assert.match(op.error ?? '', /^AT\+CPBS="ON": .*; nothing was written to the SIM$/);
+      assert.deepEqual(h.commands(), ['AT+CPBS?', 'AT+CPBS="ON"']);
+      assert.equal(/** @type {any} */ (op.result).reason, null);
     } finally {
       await h.stop();
     }

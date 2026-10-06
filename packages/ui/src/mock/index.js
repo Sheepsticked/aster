@@ -617,6 +617,11 @@ function modemRoute(method, id, verb, body) {
     }
     // A number starting with +999 stands for a SIM that locks its own-number list with PIN2.
     if (number.startsWith('+999')) return json({ operation: operation('sim-number', id, { status: 'failed', error: `${write}: +CME ERROR: SIM PIN2 required` }) }, 202);
+    // +998 stands for a modem that does not offer the own-number list.
+    if (number.startsWith('+998')) {
+      const error = 'AT+CPBS="ON": the modem does not offer the SIM\'s own-number list (it offers SM, DC, MC, ME, RC, EN); nothing was written to the SIM';
+      return json({ operation: operation('sim-number', id, { status: 'failed', error, result: { modem_id: id, offered: ['SM', 'DC', 'MC', 'ME', 'RC', 'EN'], sim_state: 'READY', reason: 'no-own-list' } }) }, 202);
+    }
     // The driver reads the new number with AT+CNUM, so the modem reports it once the write is done.
     setTimeout(() => {
       modem.number = number;
