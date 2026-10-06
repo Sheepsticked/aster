@@ -41,11 +41,18 @@ cat >"$LOCAL/ssh" <<'EOF'
 # ssh [-o option]... host command...: records the call, then runs the command as that host (down* refuse the connection,
 # drop* lose it once the update has started).
 echo "$*" >>"$FAKE_CALLS/ssh"
-while [ "$1" = -o ]; do shift 2; done
+debug=0
+while [ "$1" = -o ] || [ "$1" = -v ]; do
+  if [ "$1" = -v ]; then debug=1; shift; else shift 2; fi
+done
 host=$1; shift
 case $host in
-  down*) echo "ssh: connect to host $host port 22: Connection refused" >&2; exit 255 ;;
+  down*)
+    echo "ssh: connect to host $host port 22: Connection refused" >&2
+    if [ "$debug" = 1 ]; then echo "debug1: Exit status 255" >&2; fi
+    exit 255 ;;
 esac
+if [ "$debug" = 1 ]; then echo "debug1: fake ssh debug line" >&2; fi
 export FAKE_HOST=$host
 case "$host $*" in
   "drop"*" fleet update"*) echo "update log on this host: /tmp/aster-update.fake"; exit 255 ;;
@@ -181,43 +188,88 @@ ok2 update --yes"
   }
   if [ "$(id -u)" -ne 0 ]; then
     printf '== the sudo password\n'
-    typed $'secret\n\n' -y -K pw1 pw2 ok1
-    check "-K: exit 0" "$status" 0
-    check "-K: the hosts that needed a password and the one that did not are all updated" "$(calls aster)" "pw1 update --yes
+    typed $'secret\n\n' -y pw1 pw2 ok1
+    check "a host that needs a password is asked for it by default: exit 0" "$status" 0
+    check "the hosts that needed a password and the one that did not are all updated" "$(calls aster)" "pw1 update --yes
 pw2 update --yes
 ok1 update --yes"
-    contains "-K asks for the first host's password" "$out" "sudo password for pw1: "
-    contains "-K offers the previous password for the next host" "$out" "sudo password for pw2 (Enter: the same as before): "
-    lacks "-K asks nothing of a host that needs none" "$out" "sudo password for ok1"
+    contains "the first host's password is asked for" "$out" "sudo password for pw1: "
+    contains "the previous password is offered for the next host" "$out" "sudo password for pw2 (Enter: the same as before): "
+    lacks "a host that needs none is not asked" "$out" "sudo password for ok1"
     lacks "the password is not shown on the terminal" "$out" "secret"
     lacks "the password is on no ssh command line" "$(calls ssh)" "secret"
     lacks "the password is in no log" "$(cat "$WORK"/logs/* 2>/dev/null)" "secret"
     contains "the host got it through sudo -S" "$(calls sudo)" "pw1 -S"
+    contains "the log of the check says how sudo was satisfied" "$(cat "$WORK/logs/001-pw1.check.log")" "login: sudo, with the typed password"
+    contains "and for a host that needed none" "$(cat "$WORK/logs/003-ok1.check.log")" "login: sudo without a password"
 
-    typed $'wrong\n' -y -K pw1 ok1
+    typed $'secret\n' -y -K pw1
+    check "-K is the same as the default" "$status" 0
+
+    typed $'wrong\n' -y pw1 ok1
     check "a refused password: exit 1" "$status" 1
     contains "a refused password is named" "$out" "sudo refused the password"
     check "and nothing is updated" "$(calls aster)" ""
 
-    typed $'it\'s a "pass" $HOME\n' -y -K pwq1
+    typed $'it\'s a "pass" $HOME\n' -y pwq1
     check "a password with quotes and a dollar sign gets through as typed" "$status" 0
     check "and the host is updated" "$(calls aster)" "pwq1 update --yes"
 
-    typed '' -y -K ok1 ok2
-    check "-K with no host that needs a password asks for nothing: exit 0" "$status" 0
-    lacks "-K asks for nothing" "$out" "sudo password for"
+    typed '' -y ok1 ok2
+    check "no host that needs a password: nothing is asked, exit 0" "$status" 0
+    lacks "nothing is asked" "$out" "sudo password for"
+
+    typed '' -y --no-ask-sudo-pass pw1
+    check "--no-ask-sudo-pass: a host that needs a password fails" "$status" 1
+    lacks "--no-ask-sudo-pass asks nothing" "$out" "sudo password for"
+    contains "--no-ask-sudo-pass says why it did not ask" "$out" "and not with --no-ask-sudo-pass"
   fi
 fi
 
 if [ "$(id -u)" -ne 0 ]; then
-  run -y -K pw1
-  check "-K without a terminal: refused" "$status" 2
-  contains "-K without a terminal says why" "$out" "needs a terminal"
   run -y pw1 ok1
-  check "a host that needs a password, without -K: exit 1" "$status" 1
-  contains "it says how to be asked for one" "$out" "--ask-sudo-pass asks for a password"
+  check "a host that needs a password, with no terminal to ask on: exit 1" "$status" 1
+  contains "it says why it could not ask" "$out" "asked for only on a terminal"
   check "and nothing is updated" "$(calls aster)" ""
 fi
+
+# ---- what is shown ----------------------------------------------------------------------------------
+
+printf '== output\n'
+run -y ok1
+check "the default shows a host's full output: exit 0" "$status" 0
+contains "the output arrives marked with the host" "$out" "[ok1] the appliance is up to date"
+check "and once" "$(printf '%s\n' "$out" | grep -c 'the appliance is up to date')" 1
+contains "the place of the update's own log on the host is shown" "$out" "[ok1] update log on this host:"
+if [ "$(id -u)" -eq 0 ]; then
+  contains "how sudo was satisfied is shown" "$out" "[ok1] login: root"
+else
+  contains "how sudo was satisfied is shown" "$out" "[ok1] login: sudo without a password"
+fi
+lacks "the ssh commands are not" "$out" "sh -c <script>"
+check "every line of the screen output is the host's, or the script's own" "$(printf '%s\n' "$out" | grep -c '^debug')" 0
+contains "the timeline is kept" "$(cat "$WORK/logs/run.log")" "[ok1] update finished: exit 0 after"
+check "and has times" "$(grep -cE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} ' "$WORK/logs/run.log" | tr -d ' ')" "$(wc -l <"$WORK/logs/run.log" | tr -d ' ')"
+run -y bad1
+contains "a failed host's output is shown as it comes" "$out" "[bad1] doctor: something is wrong"
+lacks "and not repeated at the end" "$out" "the last lines of"
+
+run -y -q ok1
+check "--quiet: exit 0" "$status" 0
+lacks "--quiet leaves a host's output out of the screen" "$out" "the appliance is up to date"
+contains "--quiet still gives the result" "$out" "ok1                      updated in"
+contains "--quiet keeps the output in the log" "$(cat "$WORK/logs/001-ok1.update.log")" "the appliance is up to date"
+run -y -q bad1
+contains "--quiet shows the last lines of a failed host" "$out" "== bad1: the last lines of"
+contains "with what it said" "$out" "doctor: something is wrong"
+
+run -y -v ok1
+check "--verbose: exit 0" "$status" 0
+contains "--verbose runs ssh with -v" "$(calls ssh)" "-v ok1"
+contains "--verbose shows the ssh command" "$out" "[ok1] update: ssh"
+contains "--verbose shows ssh's own debug lines" "$out" "[ok1] debug1: fake ssh debug line"
+run -y -v -k down1 ok1
+contains "an unreachable host is named by the error, not by a debug line" "$out" "UNREACHABLE: ssh: connect to host down1 port 22: Connection refused"
 
 # ---- failures ----------------------------------------------------------------------------------------
 
@@ -255,7 +307,7 @@ contains "a host without aster is named" "$out" "FAILED: aster is not installed"
 if [ "$(id -u)" -ne 0 ]; then
   run -y nosudo1 ok1
   check "a user without sudo: exit 1" "$status" 1
-  contains "a user without sudo is named, with the way out" "$out" "FAILED: this user is not root and has no passwordless sudo (--ask-sudo-pass asks for a password)"
+  contains "a user without sudo is named" "$out" "FAILED: this user is not root and has no passwordless sudo"
   check "and nothing was updated" "$(calls aster)" ""
 fi
 

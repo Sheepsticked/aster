@@ -171,20 +171,23 @@ them; a name from `~/.ssh/config` works as a host. The login is root, or a user 
 tools/fleet-update.sh --check shop-1 shop-2 admin@192.0.2.30   # can every box be reached, and has it aster?
 tools/fleet-update.sh shop-1 shop-2 admin@192.0.2.30           # update them one after another
 tools/fleet-update.sh -f boxes.txt -j 3 --keep-going --yes     # hosts from a file, three at a time, no question
-tools/fleet-update.sh -K admin@192.0.2.30 admin@192.0.2.31     # sudo asks these hosts for a password
+tools/fleet-update.sh -q -f boxes.txt                          # one line per box and a summary, no output
 ```
 
-It first checks every box (SSH works, `aster` is there, root or passwordless `sudo`) and updates nothing if one fails
+It first checks every box (SSH works, `aster` is there, root or `sudo`) and updates nothing if one fails
 the check; `--keep-going` updates the others. Then it asks, because a box whose Asterisk image changes drops the calls
 in progress. The boxes are updated one after another and no further box is started after a failed update
-(`--keep-going` goes on, `-j` runs several at once). Each box's output is kept in a log. The update runs detached on the
+(`--keep-going` goes on, `-j` runs several at once). The update runs detached on the
 box, so a lost connection does not stop it; `aster doctor` there says how it ended. `--pull`, `--build` and `--force`
 go on to `aster update`.
 
-`-K` (`--ask-sudo-pass`) is for a box whose `sudo` asks for a password: after the check it asks, on the terminal and
-without showing it, for the password of each box that needs one (Enter repeats the previous one). The password goes to
-the box through the SSH connection itself, never on a command line or into a file, and stays in memory only until the
-run ends.
+Every box's full output is shown as it arrives, each line marked with the box; `-q` shows one line per box and a
+summary, and `-v` adds SSH's own debug output for connection trouble. Whatever the level, each box's output is kept in a
+log, and `run.log` in the same directory is a timeline of the run.
+
+On a terminal, a box whose `sudo` asks for a password is asked for it after the check: typed without showing it, Enter
+repeats the previous one. The password goes to the box through the SSH connection itself, never on a command line or into
+a file, and stays in memory only until the run ends. `--no-ask-sudo-pass` turns the question off (for cron or CI).
 
 ### Settings: `.env`
 

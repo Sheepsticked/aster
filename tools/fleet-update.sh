@@ -10,10 +10,14 @@
 #   -k, --keep-going update the hosts that pass the check even when some fail it, and go on after a failed update
 #   -n, --check      only check that every host answers and has `aster`; updates nothing
 #   -y, --yes        do not ask first
-#   -K, --ask-sudo-pass
-#                    ask for the sudo password of each host that needs one: typed here, not shown, Enter = the previous
-#                    one. It goes to the host through the ssh connection, never on a command line or into a file.
-#   -l, --logs DIR   keep one log per host in DIR (default: a new directory under $TMPDIR)
+#   -q, --quiet      one line per host and the summary; a host's output stays in its log, and a failed host's last lines are
+#                    shown. By default each host's full output is shown as it arrives, every line marked with the host
+#   -v, --verbose    also run ssh with -v and show the ssh commands, for connection trouble
+#   --no-ask-sudo-pass
+#                    do not ask for a sudo password. By default, on a terminal, each host that needs one is asked for it:
+#                    typed here, not shown, Enter = the previous one; it goes to the host through the ssh connection,
+#                    never on a command line or into a file. (-K, --ask-sudo-pass spell out that default.)
+#   -l, --logs DIR   keep one log per host in DIR (default: a new directory under $TMPDIR); run.log there is a timeline
 #   -o OPTION        an ssh option, as for `ssh -o` (repeatable)
 #
 # Examples:
@@ -23,7 +27,9 @@
 #   tools/fleet-update.sh -f boxes.txt                                the hosts of a file, one per line
 #   tools/fleet-update.sh -f boxes.txt -j 3 --keep-going --yes        three at a time, no question, skip failures
 #   tools/fleet-update.sh ssh://admin@192.0.2.10:8222                 a host with its own ssh port
-#   tools/fleet-update.sh -K admin@192.0.2.10 admin@192.0.2.11        hosts whose sudo asks for a password
+#   tools/fleet-update.sh -q -f boxes.txt                             one line per host and a summary only
+#   tools/fleet-update.sh -v --check admin@192.0.2.10                 a check with ssh's own debug output
+#   tools/fleet-update.sh --no-ask-sudo-pass -f boxes.txt             never ask for a sudo password (cron, CI)
 #   tools/fleet-update.sh -o IdentityFile=~/.ssh/aster_key box-1      a key that is not the default
 # A hosts file is plain text: `shop-1`, `admin@192.0.2.30`, one per line, blank lines and #-comments allowed.
 #
@@ -46,7 +52,8 @@ jobs=1
 keep_going=0
 check=0
 assume_yes=0
-ask_sudo=0
+ask_sudo=1
+verbose=1    # 0 quiet, 1 the full output of each host, 2 also ssh's own debug output
 logs=''
 
 while [ $# -gt 0 ]; do
@@ -66,6 +73,9 @@ while [ $# -gt 0 ]; do
     -n|--check) check=1; shift ;;
     -y|--yes) assume_yes=1; shift ;;
     -K|--ask-sudo-pass) ask_sudo=1; shift ;;
+    --no-ask-sudo-pass) ask_sudo=0; shift ;;
+    -q|--quiet) verbose=0; shift ;;
+    -v|--verbose) verbose=2; shift ;;
     -l|--logs) [ -n "${2:-}" ] || die "$1 needs a directory"; logs=$2; shift 2 ;;
     -o) [ -n "${2:-}" ] || die "-o needs an ssh option"; sshopts+=(-o "$2"); shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -87,9 +97,6 @@ for host in "${hosts[@]}"; do
 done
 hosts=("${unique[@]}")
 
-if [ "$ask_sudo" -eq 1 ] && [ ! -t 0 ]; then
-  die "--ask-sudo-pass needs a terminal to type the password on"
-fi
 if [ "$check" -eq 0 ] && [ "$assume_yes" -eq 0 ] && [ ! -t 0 ]; then
   die "it asks before it updates, and there is no terminal to ask on; pass --yes"
 fi
@@ -97,10 +104,22 @@ fi
 [ -n "$logs" ] || logs=$(mktemp -d "${TMPDIR:-/tmp}/aster-fleet.XXXXXX") || die "cannot make a log directory"
 mkdir -p "$logs" || die "cannot make $logs"
 
-# What runs on each host, as `sh -c SCRIPT fleet check|update [options]`; the first line of its input is the sudo
-# password (empty: none). The update is detached and writes to a log there.
+# A line of the timeline: always in run.log, and on the screen with --verbose.
+note() {
+  printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$logs/run.log"
+  [ "$verbose" -lt 2 ] || printf '%s\n' "$*"
+}
+# A host's output as it arrives, every line marked with the host.
+prefixed() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do printf '[%s] %s\n' "$1" "$line"; done
+}
+note "start: ${#hosts[@]} host(s), $jobs at a time; ssh options: ${sshopts[*]-none}; for aster update: ${pass[*]-nothing}"
+
+# What runs on each host, as `sh -c SCRIPT fleet check|update LIVE [options]`; the first line of its input is the sudo
+# password (empty: none). The update is detached and writes to a log there; LIVE=1 shows that log as it grows.
 read -r -d '' REMOTE <<'EOF'
-mode=$1; shift
+mode=$1; live=$2; shift 2
 IFS= read -r pw
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then "$@"
@@ -111,9 +130,13 @@ as_root() {
 aster=$(command -v aster) || { echo 'aster is not installed on this host' >&2; exit 127; }
 if ! as_root true; then
   if [ -n "$pw" ]; then echo 'sudo refused the password' >&2
-  else echo 'this user is not root and has no passwordless sudo (--ask-sudo-pass asks for a password)' >&2
+  else echo 'this user is not root and has no passwordless sudo' >&2
   fi
   exit 126
+fi
+if [ "$(id -u)" -eq 0 ]; then echo 'login: root'
+elif [ -n "$pw" ]; then echo 'login: sudo, with the typed password'
+else echo 'login: sudo without a password (a passwordless rule, or sudo still remembers a recent login)'
 fi
 if [ "$mode" = check ]; then echo "aster is at $aster"; exit 0; fi
 log=$(mktemp "${TMPDIR:-/tmp}/aster-update.XXXXXX") || exit 1
@@ -125,9 +148,11 @@ elif [ -n "$pw" ]; then
 else
   sudo -n nohup "$aster" update --yes "$@" >"$log" 2>&1 </dev/null &
 fi
-wait $!
+pid=$!
+if [ "$live" = 1 ]; then tail -n +1 -f "$log" & tailpid=$!; fi
+wait $pid
 rc=$?
-cat "$log"
+if [ "$live" = 1 ]; then sleep 2; kill $tailpid 2>/dev/null; else cat "$log"; fi
 rm -f "$log"
 exit $rc
 EOF
@@ -156,26 +181,38 @@ describe() {
       if [ -n "$remote" ]; then
         printf 'CONNECTION LOST after %s; the update goes on there, `aster doctor` says how it ended (log: %s)' "$shown" "$remote"
       else
-        printf 'UNREACHABLE: %s' "$(tail -n 1 "$log" 2>/dev/null)"
+        printf 'UNREACHABLE: %s' "$(grep -v '^debug[0-9]*:' "$log" 2>/dev/null | tail -n 1)"
       fi ;;
     *) printf 'FAILED (exit %s after %s)' "$rc" "$shown" ;;
   esac
 }
 
-# Runs the host at index $1; leaves "<exit status> <seconds>" in its .status file and its output in its .log file.
-# The sudo password, if any, is the first line of the ssh input: a builtin writes it, so no process shows it.
+# Runs the host at index $1; leaves "<exit status> <seconds>" in its .status file and its output in its .log file,
+# and shows the output as it arrives unless --quiet. The sudo password, if any, is the first line of the ssh input:
+# a builtin writes it, so no process shows it.
 run_host() {
-  local i=$1 phase=$2 host stem start=$SECONDS rc took log
+  local i=$1 phase=$2 host stem start=$SECONDS rc took log live=0 given=none
   host=${hosts[$i]}
   stem=${stems[$i]}
   log="$logs/$stem.$phase.log"
+  [ "$verbose" -eq 0 ] || live=1
+  [ -z "${sudo_pass[$i]-}" ] || given=sent
+  local -a ssh_cmd=(ssh ${sshopts[@]+"${sshopts[@]}"} -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
+  [ "$verbose" -lt 2 ] || ssh_cmd+=(-v)
   [ "$phase" = check ] || printf '[%s] updating\n' "$host"
-  printf '%s\n' "${sudo_pass[$i]-}" |
-    ssh ${sshopts[@]+"${sshopts[@]}"} -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 \
-      "$host" "sh -c $REMOTE_WORD fleet $phase ${pass[*]-}" >"$log" 2>&1
-  rc=${PIPESTATUS[1]}
+  note "[$host] $phase: ${ssh_cmd[*]} $host sh -c <script> fleet $phase $live ${pass[*]-} (sudo password: $given)"
+  if [ "$live" -eq 1 ]; then
+    printf '%s\n' "${sudo_pass[$i]-}" |
+      "${ssh_cmd[@]}" "$host" "sh -c $REMOTE_WORD fleet $phase $live ${pass[*]-}" 2>&1 | tee "$log" | prefixed "$host"
+    rc=${PIPESTATUS[1]}
+  else
+    printf '%s\n' "${sudo_pass[$i]-}" |
+      "${ssh_cmd[@]}" "$host" "sh -c $REMOTE_WORD fleet $phase $live ${pass[*]-}" >"$log" 2>&1
+    rc=${PIPESTATUS[1]}
+  fi
   took=$((SECONDS - start))
   printf '%s %s\n' "$rc" "$took" >"$logs/$stem.$phase.status"
+  note "[$host] $phase finished: exit $rc after ${took}s"
   printf '[%s] %s\n' "$host" "$(describe "$rc" "$took" "$phase" "$log")"
 }
 
@@ -196,7 +233,10 @@ run_phase() {
   shift 2
   for i in "$@"; do
     while [ "$(jobs -rp | wc -l)" -ge "$width" ]; do sleep 0.2; done
-    if [ "$phase" = update ] && [ "$keep_going" -eq 0 ] && update_failed; then continue; fi
+    if [ "$phase" = update ] && [ "$keep_going" -eq 0 ] && update_failed; then
+      note "[${hosts[$i]}] not started: an earlier update failed"
+      continue
+    fi
     run_host "$i" "$phase" &
   done
   wait
@@ -213,14 +253,14 @@ printf 'checking %d host(s); logs in %s\n' "${#hosts[@]}" "$logs"
 width=$jobs; [ "$width" -ge 8 ] || width=8
 run_phase check "$width" "${all[@]}"
 
-# A host whose sudo wants a password (exit 126) gets one typed, then is checked again.
-if [ "$ask_sudo" -eq 1 ]; then
-  needing=()
-  for i in "${all[@]}"; do
-    read -r rc _ <"$logs/${stems[$i]}.check.status"
-    [ "$rc" != 126 ] || needing+=("$i")
-  done
-  if [ "${#needing[@]}" -gt 0 ]; then
+# A host whose sudo wants a password (exit 126) is asked for one, on a terminal, and checked again.
+needing=()
+for i in "${all[@]}"; do
+  read -r rc _ <"$logs/${stems[$i]}.check.status"
+  [ "$rc" != 126 ] || needing+=("$i")
+done
+if [ "${#needing[@]}" -gt 0 ]; then
+  if [ "$ask_sudo" -eq 1 ] && [ -t 0 ]; then
     previous=''
     for i in "${needing[@]}"; do
       hint=''
@@ -228,6 +268,7 @@ if [ "$ask_sudo" -eq 1 ]; then
       printf 'sudo password for %s%s: ' "${hosts[$i]}" "$hint" >&2
       IFS= read -r -s typed
       printf '\n' >&2
+      if [ -n "$typed" ]; then note "[${hosts[$i]}] sudo password typed"; else note "[${hosts[$i]}] sudo password: the same as before"; fi
       [ -n "$typed" ] || typed=$previous
       sudo_pass[i]=$typed
       previous=$typed
@@ -235,6 +276,10 @@ if [ "$ask_sudo" -eq 1 ]; then
     unset typed previous
     printf 'checking %d host(s) again with the password\n' "${#needing[@]}"
     run_phase check "$width" "${needing[@]}"
+  else
+    note "${#needing[@]} host(s) cannot use sudo without a password and none was asked for"
+    printf 'fleet-update: %d host(s) cannot use sudo without a password; one is asked for only on a terminal, and not with --no-ask-sudo-pass\n' \
+      "${#needing[@]}" >&2
   fi
 fi
 
@@ -244,6 +289,7 @@ for i in "${all[@]}"; do
   read -r rc _ <"$logs/${stems[$i]}.check.status"
   if [ "$rc" = 0 ]; then ready+=("$i"); else refused+=("$i"); fi
 done
+note "check: ${#ready[@]} host(s) ready, ${#refused[@]} not"
 
 # The result per host, one line each; $1 is "check" to show the check only. Fails unless every host is ok.
 summary() {
@@ -274,7 +320,7 @@ summary() {
 if [ "$check" -eq 1 ]; then
   summary check
   status=$?
-  printf '\nlogs: %s\n' "$logs"
+  printf '\nlogs: %s (run.log is the timeline)\n' "$logs"
   exit "$status"
 fi
 
@@ -299,16 +345,19 @@ if [ "$assume_yes" -eq 0 ]; then
 fi
 
 printf '\nupdating %d host(s), %d at a time\n' "${#ready[@]}" "$jobs"
+note "update: ${#ready[@]} host(s), $jobs at a time"
 run_phase update "$jobs" "${ready[@]}"
 
 summary update
 status=$?
+# The output of a failed host was already shown unless --quiet: then its last lines are.
 for i in "${ready[@]}"; do
+  [ "$verbose" -eq 0 ] || break
   [ -e "$logs/${stems[$i]}.update.status" ] || continue
   read -r rc _ <"$logs/${stems[$i]}.update.status"
   [ "$rc" != 0 ] || continue
   printf '\n== %s: the last lines of %s\n' "${hosts[$i]}" "$logs/${stems[$i]}.update.log"
   tail -n 12 "$logs/${stems[$i]}.update.log"
 done
-printf '\nlogs: %s\n' "$logs"
+printf '\nlogs: %s (run.log is the timeline)\n' "$logs"
 exit "$status"
