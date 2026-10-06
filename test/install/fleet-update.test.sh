@@ -31,8 +31,9 @@ lacks() {
 
 LOCAL="$WORK/local"      # what this machine has: an ssh that "connects" by running the command here
 REMOTE="$WORK/remote"    # what a host has: aster, and sudo for a user that is not root
-EMPTY="$WORK/empty"      # a PATH with nothing in it
+EMPTY="$WORK/empty"      # a PATH with a shell and nothing else
 mkdir -p "$LOCAL" "$REMOTE" "$EMPTY"
+ln -s /bin/sh "$EMPTY/sh"
 export FAKE_CALLS="$WORK/calls"
 
 cat >"$LOCAL/ssh" <<'EOF'
@@ -47,7 +48,7 @@ case $host in
 esac
 export FAKE_HOST=$host
 case "$host $*" in
-  "drop"*" sh -s -- update"*) echo "update log on this host: /tmp/aster-update.fake"; exit 255 ;;
+  "drop"*" fleet update"*) echo "update log on this host: /tmp/aster-update.fake"; exit 255 ;;
 esac
 # A host's PATH never holds the real aster launcher a developer machine may have in /usr/local/bin.
 case $host in
@@ -57,9 +58,23 @@ esac
 EOF
 cat >"$REMOTE/sudo" <<'EOF'
 #!/bin/sh
-echo "$FAKE_HOST" >>"$FAKE_CALLS/sudo"
-[ "$1" = -n ] && shift
-case $FAKE_HOST in nosudo*) exit 1 ;; esac
+# sudo -n CMD, or sudo -S -p '' CMD with the password on the first line of stdin. pw* hosts want the password "secret",
+# pwq* hosts one with quotes and a dollar sign in it; nosudo* hosts refuse everything.
+echo "$FAKE_HOST $*" >>"$FAKE_CALLS/sudo"
+case $FAKE_HOST in
+  nosudo*) exit 1 ;;
+  pwq*) want='it'\''s a "pass" $HOME' ;;
+  pw*) want=secret ;;
+  *) want= ;;
+esac
+if [ "$1" = -S ]; then
+  shift 3
+  IFS= read -r given
+  if [ -n "$want" ] && [ "$given" != "$want" ]; then echo 'Sorry, try again.' >&2; exit 1; fi
+elif [ "$1" = -n ]; then
+  shift
+  if [ -n "$want" ]; then echo 'sudo: a password is required' >&2; exit 1; fi
+fi
 exec "$@"
 EOF
 cat >"$REMOTE/aster" <<'EOF'
@@ -98,6 +113,12 @@ check "a host that reads as an ssh option: refused" "$status" 2
 contains "and called what it is" "$out" "not a host name"
 run -y --nonsense ok1
 check "an unknown option: refused" "$status" 2
+help=$("$FLEET" --help 2>&1)
+check "--help: exit 0" "$?" 0
+contains "--help lists the options" "$help" "--keep-going"
+contains "--help gives examples" "$help" "Examples:"
+contains "--help shows how to run it on hosts" "$help" "tools/fleet-update.sh -f boxes.txt"
+check "--help stops at the end of the comment block" "$(printf '%s' "$help" | grep -c 'pipefail')" 0
 run -y -j 0 ok1
 check "--jobs 0: refused" "$status" 2
 run -y ok1 -j
@@ -148,6 +169,54 @@ if command -v script >/dev/null 2>&1; then
   check "answering yes updates the hosts" "$(calls aster)" "ok1 update --yes
 ok2 update --yes"
   contains "the question names the hosts" "$out" "Update 2 host(s) with"
+
+  # A sudo password is typed on the terminal: $1 is what is typed, the rest are the arguments. It is sent after a pause,
+  # as a person types: input that is already waiting is echoed before the prompt turns the echo off. Not for root.
+  typed() {
+    local input=$1
+    shift
+    rm -rf "$FAKE_CALLS" "$WORK/logs"; mkdir -p "$FAKE_CALLS"
+    out=$({ sleep 3; printf '%s' "$input"; } | PATH="$LOCAL:$PATH" timeout 120 script -qec "$FLEET -l $WORK/logs $*" /dev/null 2>&1)
+    status=$?
+  }
+  if [ "$(id -u)" -ne 0 ]; then
+    printf '== the sudo password\n'
+    typed $'secret\n\n' -y -K pw1 pw2 ok1
+    check "-K: exit 0" "$status" 0
+    check "-K: the hosts that needed a password and the one that did not are all updated" "$(calls aster)" "pw1 update --yes
+pw2 update --yes
+ok1 update --yes"
+    contains "-K asks for the first host's password" "$out" "sudo password for pw1: "
+    contains "-K offers the previous password for the next host" "$out" "sudo password for pw2 (Enter: the same as before): "
+    lacks "-K asks nothing of a host that needs none" "$out" "sudo password for ok1"
+    lacks "the password is not shown on the terminal" "$out" "secret"
+    lacks "the password is on no ssh command line" "$(calls ssh)" "secret"
+    lacks "the password is in no log" "$(cat "$WORK"/logs/* 2>/dev/null)" "secret"
+    contains "the host got it through sudo -S" "$(calls sudo)" "pw1 -S"
+
+    typed $'wrong\n' -y -K pw1 ok1
+    check "a refused password: exit 1" "$status" 1
+    contains "a refused password is named" "$out" "sudo refused the password"
+    check "and nothing is updated" "$(calls aster)" ""
+
+    typed $'it\'s a "pass" $HOME\n' -y -K pwq1
+    check "a password with quotes and a dollar sign gets through as typed" "$status" 0
+    check "and the host is updated" "$(calls aster)" "pwq1 update --yes"
+
+    typed '' -y -K ok1 ok2
+    check "-K with no host that needs a password asks for nothing: exit 0" "$status" 0
+    lacks "-K asks for nothing" "$out" "sudo password for"
+  fi
+fi
+
+if [ "$(id -u)" -ne 0 ]; then
+  run -y -K pw1
+  check "-K without a terminal: refused" "$status" 2
+  contains "-K without a terminal says why" "$out" "needs a terminal"
+  run -y pw1 ok1
+  check "a host that needs a password, without -K: exit 1" "$status" 1
+  contains "it says how to be asked for one" "$out" "--ask-sudo-pass asks for a password"
+  check "and nothing is updated" "$(calls aster)" ""
 fi
 
 # ---- failures ----------------------------------------------------------------------------------------
@@ -186,7 +255,7 @@ contains "a host without aster is named" "$out" "FAILED: aster is not installed"
 if [ "$(id -u)" -ne 0 ]; then
   run -y nosudo1 ok1
   check "a user without sudo: exit 1" "$status" 1
-  contains "a user without sudo is named" "$out" "FAILED: no root and no passwordless sudo"
+  contains "a user without sudo is named, with the way out" "$out" "FAILED: this user is not root and has no passwordless sudo (--ask-sudo-pass asks for a password)"
   check "and nothing was updated" "$(calls aster)" ""
 fi
 
