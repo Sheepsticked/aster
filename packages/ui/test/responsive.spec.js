@@ -878,6 +878,25 @@ test.describe('the settings page', () => {
     await page.goto('/settings');
   });
 
+  test('lets a failure toast go after a minute, and the close button at once', async ({ page }) => {
+    await page.clock.install();
+    const telegram = await openSection(page, 'settings-telegram');
+    const send = telegram.getByRole('button', { name: ru['settings.test_send'] });
+    await telegram.getByLabel(ru['settings.test']).fill('abc');
+    await send.click();
+    const failure = page.getByText(ru['settings.chat_id_invalid']);
+    await expect(failure).toBeVisible();
+    await page.clock.fastForward(59_000);
+    await expect(failure).toBeVisible();
+    await page.clock.fastForward(1_500);
+    await expect(failure).toHaveCount(0);
+
+    await send.click();
+    await expect(failure).toBeVisible();
+    await page.getByRole('button', { name: ru['toast.dismiss'] }).click();
+    await expect(failure).toHaveCount(0);
+  });
+
   test('saves the registry fields and leaves the secrets alone', async ({ page }, info) => {
     const retention = await openSection(page, 'settings-retention');
     await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
@@ -1314,7 +1333,7 @@ test.describe('the phone layout', () => {
     const bar = page.getByRole('button', { name: ru['common.save'], exact: true }).locator('..');
     await expect(bar).toHaveCSS('position', 'sticky');
 
-    // A failure has no timer, so a toast that lands on the bar hides Save until it is dismissed.
+    // A failure stays for a while, so a toast that lands on the bar would hide Save until it goes.
     const telegram = await openSection(page, 'settings-telegram');
     await telegram.getByLabel(ru['settings.test']).fill('abc');
     await telegram.getByRole('button', { name: ru['settings.test_send'] }).tap();

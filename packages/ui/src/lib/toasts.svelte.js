@@ -1,7 +1,8 @@
 // Toast store for background events; a toast never is the only place a result appears.
-// Failures stay until dismissed; other toasts time out.
+// Every toast times out, a failure after a longer wait; the close button dismisses one earlier.
 const LIMIT = 4;
 const TIMEOUT_MS = 6000;
+const ERROR_TIMEOUT_MS = 60_000;
 
 /** @typedef {{ id: number, kind: 'info' | 'success' | 'error', text: string, at: number }} Toast */
 
@@ -32,7 +33,7 @@ export const toasts = {
     // Drop the oldest when many arrive at once (e.g. a flapping modem).
     for (const gone of items.slice(0, Math.max(0, items.length - LIMIT))) forget(gone.id);
     items = items.slice(-LIMIT);
-    const ms = timeoutMs ?? (kind === 'error' ? 0 : TIMEOUT_MS);
+    const ms = timeoutMs ?? (kind === 'error' ? ERROR_TIMEOUT_MS : TIMEOUT_MS);
     if (ms > 0) timers.set(id, setTimeout(() => toasts.dismiss(id), ms));
     return id;
   },
