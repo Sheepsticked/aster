@@ -162,6 +162,24 @@ Day to day you work in the web UI. From a terminal on the box:
 | `aster update` | back up, fetch the new version, restart into it (`--force`: without the backup) |
 | `aster passwd` | change the admin password |
 
+### Updating several boxes
+
+`tools/fleet-update.sh` runs `aster update --yes` on each box over SSH, from any machine that can already log in to
+them; a name from `~/.ssh/config` works as a host. The login is root, or a user with passwordless `sudo`.
+
+```sh
+tools/fleet-update.sh --check shop-1 shop-2 admin@192.0.2.30   # can every box be reached, and has it aster?
+tools/fleet-update.sh shop-1 shop-2 admin@192.0.2.30           # update them one after another
+tools/fleet-update.sh -f boxes.txt -j 3 --keep-going --yes     # hosts from a file, three at a time, no question
+```
+
+It first checks every box (SSH works, `aster` is there, root or passwordless `sudo`) and updates nothing if one fails
+the check; `--keep-going` updates the others. Then it asks, because a box whose Asterisk image changes drops the calls
+in progress. The boxes are updated one after another and no further box is started after a failed update
+(`--keep-going` goes on, `-j` runs several at once). Each box's output is kept in a log. The update runs detached on the
+box, so a lost connection does not stop it; `aster doctor` there says how it ended. `--pull`, `--build` and `--force`
+go on to `aster update`.
+
 ### Settings: `.env`
 
 There is nothing to copy by hand. `install.sh` writes `.env` itself, from
@@ -337,7 +355,7 @@ docker/asterisk/      Asterisk images, Aster's and the standalone one: build, dr
 docker/controller/    controller image (also builds the UI)
 docker/compose.dev.yml  the same two services, built from the checkout, for development
 install/              installer, .env template, Asterisk templates, udev rule, modprobe option, Ansible role
-tools/                migration tools and a hardware probe
+tools/                migration tools, a hardware probe and the multi-box updater
 test/                 installer tests, end-to-end run, hardware scripts, fixtures
 ```
 

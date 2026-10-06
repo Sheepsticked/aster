@@ -4,10 +4,10 @@
 name: install
 on:
   push:
-    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'docker/**',
+    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'tools/fleet-update.sh', 'docker/**',
       'packages/controller/bin/generate.js', '.github/workflows/install.yml']
   pull_request:
-    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'docker/**',
+    paths: ['install/**', 'test/install/**', 'tools/write-budget.sh', 'tools/hw-probe.sh', 'tools/fleet-update.sh', 'docker/**',
       'packages/controller/bin/generate.js', '.github/workflows/install.yml']
   workflow_dispatch:
 
@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck --severity=warning install/install.sh install/bin/* install/udev/alsa-name \
-            test/install/*.sh tools/write-budget.sh tools/hw-probe.sh
+            test/install/*.sh tools/write-budget.sh tools/hw-probe.sh tools/fleet-update.sh
 
       - name: the ALSA card id udev computes
         run: sh test/install/alsa-name.test.sh
@@ -44,6 +44,9 @@ jobs:
 
       - name: aster migrate against a scratch host (check, import, cutover, rollback, cleanup)
         run: bash test/install/migrate.test.sh
+
+      - name: tools/fleet-update.sh against a stand-in ssh (order, failures, --check, parallel runs)
+        run: bash test/install/fleet-update.test.sh
 
       - name: install.sh on a clean host
         run: sudo -E install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning
