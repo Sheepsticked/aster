@@ -27,6 +27,14 @@
 #   ASTER_IMAGE_SOURCE      build | pull, the same choice as --build/--pull (default pull)
 #   ASTER_VERSION           image tag (pull: latest, build: dev), ASTER_IMAGE_NS (pull: sheepsticked,
 #                           build: aster), ASTER_REPO (default: this checkout)
+#
+# Examples (from the checkout):
+#   sudo install/install.sh                          pull the published images and ask for the admin password
+#   sudo install/install.sh --build                  build the images from this checkout instead (Asterisk is compiled)
+#   sudo install/install.sh --install-docker         on a host without Docker (apt hosts)
+#   sudo install/install.sh --http-port 8080         the UI and the API on port 8080 instead of 80
+#   sudo install/install.sh --home /srv/aster-data   keep the data outside the checkout
+#   ASTER_ADMIN_PASSWORD='a-long-password' sudo -E install/install.sh --non-interactive    without any question
 set -euo pipefail
 
 # ---- defaults ---------------------------------------------------------------------------------------------------
@@ -68,7 +76,7 @@ version_at_least() {
   [ "$(printf '%s\n%s\n' "$2" "$have_version" | sort -V | head -n 1)" = "$2" ]
 }
 
-usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 # ---- idempotent primitives --------------------------------------------------------------------------------------
 

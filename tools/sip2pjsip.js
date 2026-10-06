@@ -222,11 +222,14 @@ function fail(message) {
 }
 
 const USAGE = 'usage: node tools/sip2pjsip.js <sip.conf>    the phones block on stdout, the report on stderr';
+const EXAMPLES = `Examples:
+  node tools/sip2pjsip.js /srv/asterisk/asterisk/sip.conf > phones.yaml 2> report.txt
+  node tools/sip2pjsip.js ./sip.conf      the phones block and the report, both on the terminal`;
 
 function main() {
   const [path, ...rest] = process.argv.slice(2);
   if (path === '-h' || path === '--help') {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${USAGE}\n\n${EXAMPLES}\n`);
     return;
   }
   if (path === undefined || path.startsWith('-') || rest.length > 0) fail(USAGE);

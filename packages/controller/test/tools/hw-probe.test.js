@@ -109,5 +109,6 @@ describe('tools/hw-probe.sh', () => {
     const help = probe(['--help']);
     assert.equal(help.status, 0);
     assert.match(help.out, /^usage: sh tools\/hw-probe\.sh/);
+    assert.match(help.out, /\nExamples:\n[\s\S]*sh tools\/hw-probe\.sh --root /);
   });
 });

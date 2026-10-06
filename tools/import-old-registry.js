@@ -388,11 +388,14 @@ function readOne(dir, name) {
 }
 
 const USAGE = 'usage: node tools/import-old-registry.js <old files dir> [<temp dir>]    aster.yaml on stdout, the report on stderr';
+const EXAMPLES = `Examples:
+  node tools/import-old-registry.js /srv/asterisk/asterisk /srv/asterisk/temp > aster.yaml 2> report.txt
+  node tools/import-old-registry.js ./old-config > aster.yaml      a copy of the old files, without their temp directory`;
 
 function main() {
   const [dir, tempDir, ...rest] = process.argv.slice(2);
   if (dir === '-h' || dir === '--help') {
-    process.stdout.write(`${USAGE}\n`);
+    process.stdout.write(`${USAGE}\n\n${EXAMPLES}\n`);
     return;
   }
   if (dir === undefined || dir.startsWith('-') || rest.length > 0) fail(USAGE);

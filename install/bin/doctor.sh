@@ -8,6 +8,11 @@
 #
 # Exit status: 0 when everything it can check is fine, 1 when something is wrong — so `aster doctor` can be used in a
 # cron job or an Ansible check. A warning (a recommendation, a missing optional tool) does not fail it.
+#
+# Examples (`aster doctor` runs this script):
+#   doctor.sh                       the full check, with a disk-write sample of 20 seconds
+#   doctor.sh --write-seconds 0     without the write measurement, for a quick look
+#   doctor.sh --write-seconds 0 || echo 'needs a look'     the exit status is 1 when something is wrong
 set -euo pipefail
 
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
@@ -22,7 +27,7 @@ while [ $# -gt 0 ]; do
     --home) HOME_DIR=${2:?--home needs a directory}; shift 2 ;;
     --home=*) HOME_DIR=${1#*=}; shift ;;
     --write-seconds) WRITE_SECONDS=${2:?--write-seconds needs a number}; shift 2 ;;
-    -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'doctor.sh: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done

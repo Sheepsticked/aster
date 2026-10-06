@@ -17,6 +17,12 @@
 #
 # The whole host is measured on purpose: everything lands on the same card (/proc/diskstats, 512-byte sectors).
 # --container sums the containers' cgroup io.stat, which misses what dockerd writes for them (their json-file logs).
+#
+# Examples:
+#   tools/write-budget.sh                                      the default 15 minutes, against 5 MiB/day
+#   tools/write-budget.sh --seconds 60 --budget 10             a quick look against a budget of 10 MiB/day
+#   tools/write-budget.sh --device mmcblk0p2 --json            one partition, as a JSON object
+#   tools/write-budget.sh --seconds 120 --container aster-controller,aster-asterisk    the appliance's containers only
 set -eu
 
 window=900
@@ -35,7 +41,7 @@ while [ $# -gt 0 ]; do
     --device)  device=${2:?--device needs a name}; shift 2 ;;
     --container) containers=$(printf '%s' "${2:?--container needs a name}" | tr ',' ' '); shift 2 ;;
     --json)    json=yes; shift ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,/^[^#]/{/^#/p;}' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "write-budget: unknown argument $1" >&2; exit 2 ;;
   esac
 done

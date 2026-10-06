@@ -19,6 +19,11 @@ set -eu
 
 USAGE="usage: sh tools/hw-probe.sh [--root <dir>] [--old-home <dir>]
        over ssh: ssh <host> 'sh -s' < tools/hw-probe.sh    (with arguments: 'sh -s -- --old-home /srv/asterisk')"
+EXAMPLES="Examples:
+  ssh admin@192.0.2.10 'sh -s' < tools/hw-probe.sh > probe.md                                  a host over ssh
+  ssh admin@192.0.2.10 'sh -s -- --old-home /srv/asterisk' < tools/hw-probe.sh > probe.md      with an old appliance's home
+  sh tools/hw-probe.sh                                                                         the host this runs on
+  sh tools/hw-probe.sh --root ./captured-tree                                                  a tree captured elsewhere"
 ROOT=""
 OLD_HOME=""
 while [ $# -gt 0 ]; do
@@ -27,7 +32,7 @@ while [ $# -gt 0 ]; do
       [ $# -ge 2 ] || { echo "hw-probe.sh: $1 needs a directory" >&2; exit 2; }
       if [ "$1" = --root ]; then ROOT=$2; else OLD_HOME=$2; fi
       shift 2 ;;
-    -h|--help) echo "$USAGE"; exit 0 ;;
+    -h|--help) printf '%s\n\n%s\n' "$USAGE" "$EXAMPLES"; exit 0 ;;
     *) echo "hw-probe.sh: unknown argument $1" >&2; echo "$USAGE" >&2; exit 2 ;;
   esac
 done

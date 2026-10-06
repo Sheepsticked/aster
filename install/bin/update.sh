@@ -11,6 +11,13 @@
 #
 # It never touches config/, state/ or the registry. The backup is the way back: an older controller refuses a database
 # a newer one has migrated.
+#
+# Examples (`aster update` runs this script with the same options):
+#   update.sh                  back up, then update the way this appliance was installed; asks first
+#   update.sh --yes            the same without the question
+#   update.sh --pull --yes     pull the images the appliance's .env names, then restart into them
+#   update.sh --build          git pull in this checkout, then rebuild the images from it
+#   update.sh --force --yes    skip the backup, for when the controller is not running
 set -euo pipefail
 
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
@@ -29,7 +36,7 @@ while [ $# -gt 0 ]; do
     --pull) MODE=pull; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --force) FORCE=1; shift ;;
-    -h|--help) sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'update.sh: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done

@@ -109,5 +109,11 @@ describe('tools/sip2pjsip.js', () => {
     const usage = spawnSync(process.execPath, ['tools/sip2pjsip.js'], { cwd: ROOT, encoding: 'utf8' });
     assert.equal(usage.status, 2);
     assert.match(usage.stderr, /usage: node tools\/sip2pjsip\.js/);
+    assert.doesNotMatch(usage.stderr, /Examples:/, 'a usage error stays short');
+
+    const help = spawnSync(process.execPath, ['tools/sip2pjsip.js', '--help'], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /usage: node tools\/sip2pjsip\.js/);
+    assert.match(help.stdout, /\nExamples:\n  node tools\/sip2pjsip\.js /);
   });
 });

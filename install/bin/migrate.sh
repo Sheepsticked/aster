@@ -15,6 +15,13 @@
 #              registry, and once it answers with SIP up the old appliance is removed. No rollback after that
 #   --yes      do not ask before cutover, rollback, cleanup or replace
 # Everything cutover moves or replaces is kept in <home>/migrate/, which is what lets rollback put it all back.
+#
+# Examples (`aster migrate <command>` runs this script):
+#   migrate.sh check                            what of the old appliance is on this host, read-only
+#   migrate.sh import                           write the draft registry; then read <home>/migrate/import-report.txt
+#   migrate.sh cutover                          Aster takes over (asks first; calls in progress drop)
+#   migrate.sh rollback --yes                   undo a cutover without the question
+#   migrate.sh --old-home /opt/asterisk check   an old appliance that is not in /srv/asterisk
 set -euo pipefail
 
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
@@ -31,7 +38,7 @@ KEEP_REGISTRY=0
 SYSTEM_ROOT=${ASTER_SYSTEM_ROOT:-/}
 HEALTH_TIMEOUT=${ASTER_HEALTH_TIMEOUT:-120}
 
-usage() { sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { printf 'migrate.sh: %s\n' "$*" >&2; exit 1; }
 
 while [ $# -gt 0 ]; do

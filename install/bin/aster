@@ -19,6 +19,16 @@
 #                      or replace for cutover and cleanup in one without the old configuration (aster migrate --help)
 #   help               this text
 # Env: ASTER_HOME for a home that is not data/ in this checkout (the launcher install.sh writes sets it).
+#
+# Examples:
+#   aster status             are both containers running
+#   aster logs controller    follow the controller's log (Ctrl-C leaves it)
+#   aster restart asterisk   restart just Asterisk
+#   aster update             back up, fetch the new version, restart into it (asks first)
+#   aster update --yes       the same without the question (calls in progress drop if Asterisk is recreated)
+#   aster update --force     update without the backup, e.g. when the controller is not running
+#   aster doctor             check the appliance and say what is wrong
+#   aster migrate check      what of an old appliance is on this host
 set -euo pipefail
 
 # The checkout is the one this file is in, and the home is data/ inside it unless ASTER_HOME says otherwise.
@@ -31,7 +41,7 @@ ENV_FILE=${ASTER_ENV_FILE:-$REPO/.env}
 [ -f "$ENV_FILE" ] || [ ! -f "$HOME_DIR/.env" ] || ENV_FILE="$HOME_DIR/.env"
 COMPOSE_FILE="$REPO/docker-compose.yml"
 
-usage() { sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 die() { printf 'aster: %s\n' "$*" >&2; exit 1; }
 # Say which is missing and where: the home ASTER_HOME names (checked first), or the .env install.sh writes.
 need_home() {

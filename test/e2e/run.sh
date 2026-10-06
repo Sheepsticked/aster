@@ -28,6 +28,12 @@
 #                      writes the pages the start-up dirtied back within 30 s, and they are not idle writes)
 # Env: ASTER_HTTP_PORT (80 as root, else 8080), ASTER_E2E_TELEGRAM_PORT (8090; the inspection API is on the next port),
 #      ASTER_E2E_PASSWORD (the admin password), ASTER_VERSION/ASTER_IMAGE_NS (the image tag, default dev / aster)
+#
+# Examples:
+#   test/e2e/run.sh                                        build both images and run everything
+#   test/e2e/run.sh --no-build                             use the aster/*:dev images that are already there
+#   test/e2e/run.sh --no-build --skip-ui --skip-budget     only the flows, the quickest run
+#   test/e2e/run.sh --keep                                 leave the stack running for a look; stop it with --down
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -56,7 +62,7 @@ while [ $# -gt 0 ]; do
     --ui-in-docker) UI_DOCKER=1; shift ;;
     --budget-seconds) BUDGET_SECONDS=${2:?--budget-seconds needs a number}; shift 2 ;;
     --budget-settle) BUDGET_SETTLE=${2:?--budget-settle needs a number}; shift 2 ;;
-    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "run.sh: unknown argument $1 (try --help)" >&2; exit 2 ;;
   esac
 done

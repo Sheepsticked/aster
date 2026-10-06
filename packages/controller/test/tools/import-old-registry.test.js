@@ -166,5 +166,11 @@ describe('tools/import-old-registry.js', () => {
     const usage = spawnSync(process.execPath, ['tools/import-old-registry.js'], { cwd: ROOT, encoding: 'utf8' });
     assert.equal(usage.status, 2);
     assert.match(usage.stderr, /usage: node tools\/import-old-registry\.js/);
+    assert.doesNotMatch(usage.stderr, /Examples:/, 'a usage error stays short');
+
+    const help = spawnSync(process.execPath, ['tools/import-old-registry.js', '--help'], { cwd: ROOT, encoding: 'utf8' });
+    assert.equal(help.status, 0);
+    assert.match(help.stdout, /usage: node tools\/import-old-registry\.js/);
+    assert.match(help.stdout, /\nExamples:\n  node tools\/import-old-registry\.js /);
   });
 });

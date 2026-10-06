@@ -5,6 +5,11 @@
 # Usage: backup.sh [--home DIR] [--keep N]      (--home default: data/ in the checkout this script is in)
 # Writes: <home>/backups/aster-<timestamp>.tar.gz (0600 — it contains config/secrets.env), keeping the newest N (10).
 # Restore (the appliance must be down): docker compose down, untar over the home, docker compose up -d.
+#
+# Examples (`aster backup` runs this script):
+#   backup.sh                          write a backup of this appliance now
+#   backup.sh --keep 30                keep the newest 30 archives instead of ten
+#   backup.sh --home /srv/aster-data   an appliance whose data is not in data/ of this checkout
 set -euo pipefail
 
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
@@ -18,7 +23,7 @@ while [ $# -gt 0 ]; do
     --home) HOME_DIR=${2:?--home needs a directory}; shift 2 ;;
     --home=*) HOME_DIR=${1#*=}; shift ;;
     --keep) KEEP=${2:?--keep needs a number}; shift 2 ;;
-    -h|--help) sed -n '2,7p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) printf 'backup.sh: unknown option: %s\n' "$1" >&2; exit 2 ;;
   esac
 done

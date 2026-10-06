@@ -418,10 +418,11 @@ check "nothing was written before it" "$(exists "$WORK/old-docker/home")$(exists
 other_run=$(old_engine 0)
 check "another old engine is told to upgrade" "$(printf '%s' "$other_run" | grep -c 'Docker Engine 20.10.24+dfsg1 is too old: Aster needs 25 or newer (upgrade Docker)')" '1'
 
-# Each usage() prints its header comment by line range; a range one line too long would print code.
-printf '\n== the help of every script is help and nothing else\n'
+# Each help prints the comment block at the top of its script: no code after it, and examples in it.
+printf '\n== the help of every script is help, with examples, and nothing else\n'
 for script_help in "$REPO/install/install.sh -h" "$REPO/install/bin/aster help" "$REPO/install/bin/backup.sh --help" \
-  "$REPO/install/bin/update.sh --help" "$REPO/install/bin/doctor.sh --help" "$REPO/install/bin/migrate.sh --help"; do
+  "$REPO/install/bin/update.sh --help" "$REPO/install/bin/doctor.sh --help" "$REPO/install/bin/migrate.sh --help" \
+  "$REPO/tools/write-budget.sh --help" "$REPO/tools/hw-probe.sh --help" "$REPO/test/e2e/run.sh --help"; do
   # shellcheck disable=SC2086  # the command and its flag are meant to split
   help_text=$(bash $script_help 2>&1 || true)
   name=$(basename "${script_help%% *}")
@@ -432,6 +433,13 @@ for script_help in "$REPO/install/install.sh -h" "$REPO/install/bin/aster help" 
     failed=$((failed + 1))
   else
     printf 'ok   %s --help stops at the end of its comment block\n' "$name"
+  fi
+  ran=$((ran + 1))
+  if printf '%s' "$help_text" | grep -q '^Examples'; then
+    printf 'ok   %s --help has examples\n' "$name"
+  else
+    printf 'FAIL %s --help has no examples\n' "$name" >&2
+    failed=$((failed + 1))
   fi
 done
 
