@@ -4,8 +4,8 @@ One AtCommand patch per driver (`0001-chan-dongle-at-command-events.patch`,
 `0001-chan-quectel-at-command-events.patch`), identical in structure, applied by the Dockerfile in the drivers stage
 with `git apply` (`build-driver.sh`). `build-driver.sh` applies every `*-chan-<driver>-*.patch` it finds, in name
 order, so each driver also carries the later patches listed under "Status" below: discovery fixes, the radio setting,
-USB-sound-card audio, the Quectel receive gain, the sound-card recovery, the Quectel SMS delivery reports and the
-Quectel USSD character set. None of them changes the AtCommand contract.
+USB-sound-card audio, the Quectel receive gain, the sound-card recovery, the Quectel SMS delivery reports, the
+Quectel USSD character set and the text of equipment errors. None of them changes the AtCommand contract.
 
 Each patch is a `git format-patch` export whose commit message names the upstream commit it applies to (`Upstream:`)
 and what it is for (`Purpose:`). This file is the protocol contract the controller's `at` module is written against.
@@ -48,7 +48,7 @@ Error: <text>                      present when Result != OK (the ERROR/+CMS/+CM
 ```
 
 `Error:` texts: for `Result: ERROR` the terminal line itself (`ERROR`, `COMMAND NOT SUPPORT`,
-`+CMS ERROR: <n>`, `+CME ERROR: <n>`), `queue flushed` (guarantee 3) or `task removed` (the task
+`+CMS ERROR: <n>`, `+CME ERROR: <text>`, e.g. `+CME ERROR: network rejected request`), `queue flushed` (guarantee 3) or `task removed` (the task
 left the queue for another reason: an unexpected result such as the multi-line `+CMGR:` answer to
 `AT+CMGR`, which the driver consumes itself, or a write error); for `Result: TIMEOUT` the text
 `timeout`. `Line:` never carries results the modem sends on its own (`^RSSI`, `^MODE`, `^BOOT`,
@@ -112,7 +112,7 @@ radio = keep | on | off        default keep; read like every shared setting (Ast
 
 - `keep`: no `AT+CFUN` at all (upstream behaviour).
 - `on`: right after `ATE0` the initialization sends `AT+CFUN?` and `AT+CFUN=1`, then continues as upstream.
-- `off`: right after `ATE0` it sends `AT+CFUN?` and `AT+CFUN=0`, then only `AT+CGMI`, `AT+CGMM`, `AT+CGMR`, `AT+CMEE=0` and
+- `off`: right after `ATE0` it sends `AT+CFUN?` and `AT+CFUN=0`, then only `AT+CGMI`, `AT+CGMM`, `AT+CGMR`, `AT+CMEE=2` and
   `AT+CGSN`, and stops there. The device stays connected (the monitor keeps pinging it) and is never initialized: no SIM
   command, no SMS poll; calls, `…SendSMS`, `…SendUSSD` and `…AtCommand` (`Device not initialized`) are refused as for any
   device that did not initialize. `State: Radio off`. A disconnect of such a device logs no "Error initializing".
@@ -154,6 +154,8 @@ Every patch below is applied in the image.
 | `0009-chan-quectel-user-command-deadline.patch` | @ `3d45c7f`, after 0008 | An AtCommand is written by the AMI thread while the monitor thread already sits in its 10 s idle wait, so the command timed out when that wait ended (after 0–10 s) and the modem was restarted, whatever `Timeout` it had. A written head command whose own deadline is still ahead is now waited for. |
 | `0010-chan-dongle-user-command-deadline.patch` | wdoekes/asterisk-chan-dongle @ `31eb619`, after 0002 | The same fix for chan_dongle. |
 | `0011-chan-quectel-ussd-ucs2.patch` | @ `3d45c7f`, after 0009 | USSD in the character set the initialization selects (`AT+CSCS="UCS2"`), in which a Quectel modem takes the `AT+CUSD` string and gives the `+CUSD` text as UCS-2 hex (3GPP TS 27.007). Upstream sent the code as packed GSM 7-bit hex, the convention of Huawei sticks, which the modem refuses with `ERROR`, and unpacked 7-bit answers the same way. The code now goes as UCS-2 hex with DCS 15, and an answer that is UCS-2 hex is decoded as such whatever its DCS; 8-bit data and any other string are passed on as they are. |
+| `0012-chan-quectel-cme-error-text.patch` | @ `3d45c7f`, after 0011 | The initialization sends `AT+CMEE=2` instead of `AT+CMEE=0`, so a refused command ends in `+CME ERROR: <text>` (for example `network rejected request` when the operator refuses a call-forwarding change) instead of a bare `ERROR`. Every response handler already treats `+CME ERROR:` like `ERROR`, so `AtDone` carries the text as its `Error:` and nothing else changes. |
+| `0012-chan-dongle-cme-error-text.patch` | wdoekes/asterisk-chan-dongle @ `31eb619`, after 0010 | The same for chan_dongle. |
 
 Line endings: 12 of the 25 chan_quectel files the series touches (`at_command.[ch]`, `at_parse.c`, `at_response.[ch]`,
 `chan_quectel.[ch]`, `dc_config.[ch]`, `manager.c`, `pdiscovery.c`, `quectel.conf`) are committed upstream with CRLF
