@@ -134,6 +134,13 @@ while the modem looks fine. The installer writes `options snd_usb_audio lowlaten
 call). The option is read when the module loads, so an appliance whose module was already loaded needs one reboot
 after the install; `aster doctor` says which mode is running.
 
+**A Raspberry Pi 3 or older.** Its USB controller, `dwc_otg`, loses one of its 8 USB channels until the next reboot
+each time a USB-audio transfer that its fast interrupt (FIQ) handles is cancelled, which a Quectel in UAC mode does at
+every call start and end: after a few calls the call audio fails, and with no channel left the network stops too. The
+installer adds `dwc_otg.fiq_fsm_mask=0x3` (USB audio on the normal interrupt path) to `cmdline.txt`, keeps the
+original as `cmdline.txt.before-aster` and asks for a reboot; `aster doctor` checks it. A Pi 4 or 5 uses a standard
+xHCI controller and is not affected.
+
 ## First run
 
 1. **Overview → Scan.** Aster reads the USB bus and lists the modems it found.
@@ -243,7 +250,8 @@ Silence in one or both directions on a Quectel, while the modem shows as connect
 kernel's USB audio driver (see Requirements). `aster doctor` reports the running mode and counts the calls whose
 audio never reached the modem (the driver's `UAC audio of this call` line in `logs/asterisk/full`, hundreds of
 playback underruns); a card whose setup failed once (`Couldn't set the new hw params`) is retried by the driver
-until it opens.
+until it opens. On a Raspberry Pi 3 or older, audio that fails after a few calls and comes back after a reboot is
+the USB controller (see Requirements).
 
 Raise gain one step at a time — clipping sounds worse than quiet. On an EC25 start with `qrxgain`, which acts inside
 the modem before the audio is squashed; the modem's own default of 20577 distorts a normal speaking voice, which is
@@ -289,7 +297,8 @@ An SD card dies from being written to, mostly from small, frequent file changes.
 phones' registrations in RAM (after an Asterisk restart a phone rings again once it re-registers), checks its
 containers every 5 minutes, and the installer moves containerd's temporary files to `/run`. Volatile state
 stays in memory, the Asterisk log is written once, container logs are capped. The rest of the host (swap, journald,
-`/tmp`) belongs to whoever built the OS image: `aster doctor` reports it and the measured write rate.
+`/tmp`) belongs to whoever built the OS image: `aster doctor` reports it, and `aster doctor --write-seconds 20` also
+measures the write rate.
 
 ## The Asterisk image on its own
 
@@ -317,7 +326,8 @@ docker run -d --name asterisk --network host --privileged -v /dev:/dev \
   `docker build --target asterisk-dongle-quectel -t my/asterisk docker/asterisk`.
 - On the host, keep ModemManager off the modems (the `ID_MM_*` lines of
   [install/udev/90-aster.rules](install/udev/90-aster.rules)). A Quectel's USB sound card needs
-  `snd_usb_audio lowlatency=0` (see Requirements).
+  `snd_usb_audio lowlatency=0`, and on a Raspberry Pi 3 or older the kernel option `dwc_otg.fiq_fsm_mask=0x3`
+  (see Requirements).
 
 ## Development
 

@@ -4,23 +4,26 @@
 #
 # Usage: doctor.sh [--home DIR] [--write-seconds N]
 #   --home           the appliance's data (default: data/ in the checkout this script is in)
-#   --write-seconds  how long to sample the disk for the write rate (default 20; 0 skips the measurement)
+#   --write-seconds  also measure the disk's write rate by sampling it for N seconds (off by default)
 #
 # Exit status: 0 when everything it can check is fine, 1 when something is wrong — so `aster doctor` can be used in a
-# cron job or an Ansible check. A warning (a recommendation, a missing optional tool) does not fail it.
+# cron job or an Ansible check. A note (a recommendation, a missing optional tool, errors in the logs) does not fail it.
+# The last lines list every problem and note found.
 #
 # Examples (`aster doctor` runs this script):
-#   doctor.sh                       the full check, with a disk-write sample of 20 seconds
-#   doctor.sh --write-seconds 0     without the write measurement, for a quick look
-#   doctor.sh --write-seconds 0 || echo 'needs a look'     the exit status is 1 when something is wrong
+#   doctor.sh                       every check, without the write measurement
+#   doctor.sh --write-seconds 20    every check, and the write rate sampled for 20 seconds
+#   doctor.sh || echo 'needs a look'     the exit status is 1 when something is wrong
 set -euo pipefail
 
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
 SELF=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(CDPATH='' cd -- "$SELF/../.." && pwd)
 HOME_DIR="$REPO/data"
-WRITE_SECONDS=20
+WRITE_SECONDS=0
 PROBLEMS=0
+PROBLEM_LIST=()
+NOTE_LIST=()
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -32,12 +35,30 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+case $WRITE_SECONDS in ''|*[!0-9]*) printf 'doctor.sh: --write-seconds needs a number of seconds\n' >&2; exit 2 ;; esac
+
+# Problems and notes are marked in colour on a terminal and listed again in the summary at the end.
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  C_BAD=$'\033[1;31m' C_NOTE=$'\033[1;33m' C_OK=$'\033[32m' C_OFF=$'\033[0m'
+else
+  C_BAD='' C_NOTE='' C_OK='' C_OFF=''
+fi
 have() { command -v "$1" >/dev/null 2>&1; }
 head_line() { printf '\n== %s\n' "$*"; }
-ok() { printf '   ok       %s\n' "$*"; }
+ok() { printf '   %sok%s       %s\n' "$C_OK" "$C_OFF" "$*"; }
 info() { printf '            %s\n' "$*"; }
-bad() { PROBLEMS=$((PROBLEMS + 1)); printf '   PROBLEM  %s\n' "$*"; }
-warn() { printf '   note     %s\n' "$*"; }
+bad() { PROBLEMS=$((PROBLEMS + 1)); PROBLEM_LIST+=("$*"); printf '   %sPROBLEM%s  %s\n' "$C_BAD" "$C_OFF" "$*"; }
+warn() { NOTE_LIST+=("$*"); printf '   %snote%s     %s\n' "$C_NOTE" "$C_OFF" "$*"; }
+# A numbered list, one item per line.
+list_items() {
+  local colour=$1 i text
+  shift
+  i=0
+  for text in "$@"; do
+    i=$((i + 1))
+    printf '%s  %2d.%s %s\n' "$colour" "$i" "$C_OFF" "$text"
+  done
+}
 
 ENV_FILE=${ASTER_ENV_FILE:-$REPO/.env}
 # Fallback: .env in the home (older installs).
@@ -167,6 +188,44 @@ else
   fi
 fi
 
+# ---- the USB controller of a Raspberry Pi 3 or older ------------------------------------------------------------
+
+# dwc_otg loses a host channel until reboot whenever an isochronous transfer its FIQ runs is cancelled (UAC calls,
+# driver restarts); install.sh adds dwc_otg.fiq_fsm_mask=0x3 to cmdline.txt. Bound to a device = actually in use.
+head_line "USB controller (Raspberry Pi 3 and older)"
+# Whether a fiq_fsm_mask value (decimal or 0x hex) still sends isochronous transfers (bit 2) to the FIQ.
+mask_has_iso() {
+  local mask
+  if [[ $1 =~ ^0[xX][0-9a-fA-F]{1,4}$ ]]; then mask=$((16#${1:2}))
+  elif [[ $1 =~ ^[0-9]{1,5}$ ]]; then mask=$((10#$1))
+  else return 0
+  fi
+  [ $((mask & 4)) -ne 0 ]
+}
+dwc_bound=0
+for dev in /sys/bus/platform/drivers/dwc_otg/*.usb; do [ -L "$dev" ] && dwc_bound=1; done
+if [ "$dwc_bound" -eq 0 ]; then
+  ok "no dwc_otg USB controller here (only a Raspberry Pi 3 or older has one)"
+else
+  dwc_params=/sys/module/dwc_otg/parameters
+  dwc_mask=$(cat "$dwc_params/fiq_fsm_mask" 2>/dev/null || echo '?')
+  cmdline=/boot/cmdline.txt
+  [ -f /boot/firmware/cmdline.txt ] && cmdline=/boot/firmware/cmdline.txt
+  if [ "$(cat "$dwc_params/fiq_enable" 2>/dev/null)" != Y ] || [ "$(cat "$dwc_params/fiq_fsm_enable" 2>/dev/null)" != Y ] ||
+     ! mask_has_iso "$dwc_mask"; then
+    ok "dwc_otg keeps isochronous transfers out of its FIQ (fiq_fsm_mask=$dwc_mask)"
+  else
+    dwc_text="dwc_otg runs isochronous transfers in its FIQ (fiq_fsm_mask=$dwc_mask): every UAC call and driver restart can lose one of its 8 USB channels until reboot; after a few calls the call audio fails, then the network."
+    boot_mask=$(head -n 1 "$cmdline" 2>/dev/null | tr ' ' '\n' | sed -n 's/^dwc_otg\.fiq_fsm_mask=//p' | tail -1)
+    if [ -n "$boot_mask" ] && ! mask_has_iso "$boot_mask"; then
+      dwc_text="$dwc_text $cmdline already sets dwc_otg.fiq_fsm_mask=$boot_mask: reboot to apply it"
+    else
+      dwc_text="$dwc_text Run install/install.sh again (it adds dwc_otg.fiq_fsm_mask=0x3 to $cmdline), then reboot"
+    fi
+    if [ -n "$uac_card" ] || [ "${uac_configured:-0}" != 0 ]; then bad "$dwc_text"; else warn "$dwc_text (no UAC modem yet)"; fi
+  fi
+fi
+
 # ---- disk and the write budget  ------------------------------------------------------------------------------
 
 head_line "disk and the write budget"
@@ -239,6 +298,8 @@ if [ "$WRITE_SECONDS" -gt 0 ] && [ -x "$REPO/tools/write-budget.sh" ]; then
     || warn "the write rate is above the budget; the lines above say what was measured"
 elif [ "$WRITE_SECONDS" -gt 0 ]; then
   warn "no $REPO/tools/write-budget.sh — this checkout looks incomplete"
+else
+  info "the write rate is not measured (aster doctor --write-seconds 20 samples it)"
 fi
 
 # ---- the last errors --------------------------------------------------------------------------------------------
@@ -248,20 +309,40 @@ errors=''
 [ -f "$HOME_DIR/logs/asterisk/full" ] && errors=$(grep -E 'ERROR|WARNING' "$HOME_DIR/logs/asterisk/full" 2>/dev/null | tail -20 || true)
 if [ -n "$errors" ]; then
   printf '%s\n' "$errors" | sed 's/^/   /'
+  # Counted since Asterisk last started (its version banner resets the count), so the summary says they are there.
+  log_errors=$(awk '/\] Asterisk [0-9][0-9.]* built by / {n = 0} / ERROR\[/ {n++} END {print n + 0}' "$HOME_DIR/logs/asterisk/full" 2>/dev/null || echo 0)
+  [ "${log_errors:-0}" = 0 ] || warn "$log_errors ERROR line(s) in logs/asterisk/full since Asterisk started; the last ones are listed under \"the last 20 error lines\""
 else
   ok "nothing in logs/asterisk/full"
 fi
 if have docker && docker ps --format '{{.Names}}' | grep -qx aster-controller; then
   controller_errors=$(docker logs --tail 200 aster-controller 2>&1 | grep '"level":"error"' | tail -5 || true)
-  [ -n "$controller_errors" ] && printf '%s\n' "$controller_errors" | sed 's/^/   /' || ok "no error line in the controller log"
+  if [ -n "$controller_errors" ]; then
+    printf '%s\n' "$controller_errors" | sed 's/^/   /'
+    warn "the controller logged errors recently (docker logs aster-controller); the last ones are listed above"
+  else
+    ok "no error line in the controller log"
+  fi
 fi
 
 # ---- verdict ----------------------------------------------------------------------------------------------------
 
+RULE='================================================================================================'
 printf '\n'
 if [ "$PROBLEMS" -eq 0 ]; then
-  printf 'doctor: everything checked is fine.\n'
+  printf '%sdoctor: everything checked is fine.%s\n' "$C_OK" "$C_OFF"
+  if [ "${#NOTE_LIST[@]}" -gt 0 ]; then
+    printf '%s%d note(s), worth a look but not failing the check:%s\n' "$C_NOTE" "${#NOTE_LIST[@]}" "$C_OFF"
+    list_items "$C_NOTE" "${NOTE_LIST[@]}"
+  fi
 else
-  printf 'doctor: %s problem(s) above.\n' "$PROBLEMS"
+  printf '%s%s%s\n' "$C_BAD" "$RULE" "$C_OFF"
+  printf '%s  doctor: %d PROBLEM(S) — fix these:%s\n' "$C_BAD" "$PROBLEMS" "$C_OFF"
+  list_items "$C_BAD" "${PROBLEM_LIST[@]}"
+  if [ "${#NOTE_LIST[@]}" -gt 0 ]; then
+    printf '%s  and %d note(s), worth a look but not failing the check:%s\n' "$C_NOTE" "${#NOTE_LIST[@]}" "$C_OFF"
+    list_items "$C_NOTE" "${NOTE_LIST[@]}"
+  fi
+  printf '%s%s%s\n' "$C_BAD" "$RULE" "$C_OFF"
   exit 1
 fi

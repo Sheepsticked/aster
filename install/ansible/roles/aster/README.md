@@ -38,7 +38,7 @@ done nothing.
 | `aster_install_docker` | `false` | `--install-docker`: let the installer apt-install Docker when it is missing |
 | `aster_rebuild` | `false` | `--rebuild`: build the images again even when they are there. **Recreates both containers, so calls drop** |
 | `aster_start` | `true` | `false` passes `--skip-up`: everything but starting the containers |
-| `aster_doctor` | `true` | run `doctor.sh` at the end; a problem fails the play |
+| `aster_doctor` | `true` | run `doctor.sh` at the end; a problem fails the play (on a Raspberry Pi 3 or older with a UAC modem, until the host is rebooted after the installer added a kernel option) |
 | `aster_admin_password` | `""` | required on a **first** install; ignored afterwards, because the hash is already set |
 | `aster_telegram_token` | `""` | optional; Settings → Telegram bot can set it later instead |
 | `aster_become` | `true` | play-level `become` |

@@ -41,8 +41,8 @@ context. The console: `docker exec -it asterisk asterisk -r`.
 - Privileged with `/dev`, so a modem can be unplugged and come back; host networking for SIP and RTP.
 - Keep ModemManager off the modems (the `ID_MM_*` lines of
   [90-aster.rules](https://github.com/Sheepsticked/aster/blob/main/install/udev/90-aster.rules)). A Quectel's USB
-  sound card needs `options snd_usb_audio lowlatency=0` on the host
-  ([why](https://github.com/Sheepsticked/aster#requirements)).
+  sound card needs `options snd_usb_audio lowlatency=0` on the host, and on a Raspberry Pi 3 or older the kernel
+  option `dwc_otg.fiq_fsm_mask=0x3` ([why](https://github.com/Sheepsticked/aster#requirements)).
 
 ## Tags
 

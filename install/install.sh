@@ -3,7 +3,8 @@
 # nothing: hand-owned files, secrets already set and anything under state/, spool/, logs/ or backups/ are kept.
 #
 # The appliance is this checkout, its data goes into data/. Outside it the installer writes only the udev rule and its
-# helper, usb-modeswitch, a snd_usb_audio option, containerd's TMPDIR drop-in and /usr/local/bin/aster.
+# helper, usb-modeswitch, a snd_usb_audio option, containerd's TMPDIR drop-in, /usr/local/bin/aster and, on a
+# Raspberry Pi 3 or older, one kernel option in cmdline.txt.
 # The last line printed is CHANGED=<n>, the number of changes made.
 #
 # Usage: install.sh [options]
@@ -66,8 +67,42 @@ say() { printf '%s\n' "$*"; }
 step() { printf '\n== %s\n' "$*"; }
 ok() { printf '   %s\n' "$*"; }
 did() { CHANGED=$((CHANGED + 1)); printf '   changed: %s\n' "$*"; }
-warn() { printf '   warning: %s\n' "$*" >&2; }
-die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+
+# Warnings and errors are framed blocks (in colour on a terminal), and every warning is listed again at the end.
+WARNINGS=()
+if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
+  C_WARN=$'\033[1;33m' C_ERR=$'\033[1;31m' C_OFF=$'\033[0m'
+else
+  C_WARN='' C_ERR='' C_OFF=''
+fi
+RULE='================================================================================================'
+# block COLOUR TITLE TEXT: the text between a titled rule and a closing one, every line marked, so it stands out of
+# the log. Lines are not wrapped (the terminal does that), so a grep of the output still finds every sentence whole.
+block() {
+  local colour=$1 title=$2 line
+  shift 2
+  {
+    printf '\n%s== %s %s%s\n' "$colour" "$title" "${RULE:$((${#title} + 4))}" "$C_OFF"
+    while IFS= read -r line; do printf '%s||%s %s\n' "$colour" "$C_OFF" "$line"; done <<< "$*"
+    printf '%s%s%s\n' "$colour" "$RULE" "$C_OFF"
+  } >&2
+}
+# A warning's first line says what to do; more lines may follow with the why.
+warn() { WARNINGS+=("$*"); block "$C_WARN" WARNING "$*"; }
+# The first line of every warning of the run, numbered, so none is lost in the scroll.
+warnings_summary() {
+  [ "${#WARNINGS[@]}" -gt 0 ] || return 0
+  local i
+  {
+    printf '\n%s%s%s\n' "$C_WARN" "$RULE" "$C_OFF"
+    printf '%s  %d WARNING(S) IN THIS RUN — read them before you rely on this host:%s\n' "$C_WARN" "${#WARNINGS[@]}" "$C_OFF"
+    for i in "${!WARNINGS[@]}"; do
+      printf '%s  %2d.%s %s\n' "$C_WARN" "$((i + 1))" "$C_OFF" "${WARNINGS[$i]%%$'\n'*}"
+    done
+    printf '%s%s%s\n' "$C_WARN" "$RULE" "$C_OFF"
+  } >&2
+}
+die() { warnings_summary; block "$C_ERR" "ERROR — install.sh stopped" "$*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 is_root() { [ "$(id -u)" -eq 0 ]; }
 # Whether version $1 is $2 or newer, by its leading dotted number ("2.40.3+ds1" is 2.40.3).
@@ -353,7 +388,7 @@ preflight() {
   ok "docker ${engine_version:-?} with compose ${compose_version:-?}"
 
   if have systemctl && systemctl is-active --quiet ModemManager 2>/dev/null; then
-    warn "ModemManager is active: it opens modem serial ports and fights the Asterisk drivers. Disable it (systemctl disable --now ModemManager); the udev rule below also tells it to keep away."
+    warn "ModemManager is active: it opens modem serial ports and fights the Asterisk drivers. Disable it (systemctl disable --now ModemManager); the udev rule of step 6 also tells it to keep away."
   fi
   if [ -d /srv/asterisk ] || docker ps --format '{{.Names}}' 2>/dev/null | grep -qx asterisk; then
     warn "the old /srv/asterisk appliance looks present: the two stacks cannot own the same modems, and while its Asterisk holds SIP port 5060 this one starts with no transport at all — so no phone registers until the cutover (\`aster migrate check\` lists what else conflicts, the migration notes)"
@@ -702,6 +737,91 @@ install_containerd_tmpdir() {
   fi
 }
 
+# ---- 6d. the USB controller of a Raspberry Pi 3 or older -------------------------------------------------------
+
+# dwc_otg (Pi 1, 2, 3, Zero) loses a host channel until reboot whenever an isochronous transfer its FIQ runs is
+# cancelled; fiq_fsm_mask=0x3 keeps isochronous transfers out of the FIQ. Pi 4 and 5 use xHCI and are not affected.
+DWC_OTG_ARG=dwc_otg.fiq_fsm_mask=0x3
+DWC_OTG_WHY="Why: a Raspberry Pi 3 or older drives its USB ports with the dwc_otg controller. Its kernel driver loses one of the controller's 8 USB channels, until the next reboot, each time an isochronous transfer handled in its fast interrupt (FIQ) is cancelled.
+A USB-audio (UAC) modem cancels one at the start and the end of calls and at every driver restart: after a few calls the call audio fails (the far end hears nothing), and once no channel is left the network stops too.
+$DWC_OTG_ARG moves isochronous transfers to the normal interrupt path. A Raspberry Pi 4 or 5 is not affected: its USB ports use a standard xHCI controller, not dwc_otg."
+
+# Bound to a device, not merely built in: the arm64 kernel of a Pi 4 and 5 carries the driver without using it.
+dwc_otg_in_use() {
+  local dev
+  for dev in "$(sysfile /sys/bus/platform/drivers/dwc_otg)"/*.usb; do [ -L "$dev" ] && return 0; done
+  return 1
+}
+# The firmware's kernel command line: /boot/firmware/cmdline.txt where there is one (/boot/cmdline.txt is then a stub).
+boot_cmdline() {
+  local file
+  for file in /boot/firmware/cmdline.txt /boot/cmdline.txt; do
+    [ -f "$(sysfile "$file")" ] && { printf '%s' "$file"; return 0; }
+  done
+  return 1
+}
+# Whether a fiq_fsm_mask value still sends isochronous transfers (bit 2) to the FIQ; an unreadable value counts as yes.
+fiq_mask_has_iso() {
+  local mask
+  if [[ $1 =~ ^0[xX][0-9a-fA-F]{1,4}$ ]]; then mask=$((16#${1:2}))
+  elif [[ $1 =~ ^[0-9]{1,5}$ ]]; then mask=$((10#$1))
+  else return 0
+  fi
+  [ $((mask & 4)) -ne 0 ]
+}
+
+install_dwc_otg_option() {
+  step "6d/8 the USB controller of a Raspberry Pi 3 or older (dwc_otg)"
+  if ! dwc_otg_in_use; then
+    ok "not needed: no dwc_otg USB controller here (only a Raspberry Pi 3 or older has one)"
+    return
+  fi
+  local params running_iso=0
+  params=$(sysfile /sys/module/dwc_otg/parameters)
+  if [ "$(cat "$params/fiq_enable" 2>/dev/null)" = Y ] && [ "$(cat "$params/fiq_fsm_enable" 2>/dev/null)" = Y ] &&
+     fiq_mask_has_iso "$(cat "$params/fiq_fsm_mask" 2>/dev/null)"; then
+    running_iso=1
+  fi
+  local cmdline file line value new boot_arg=$DWC_OTG_ARG
+  if ! cmdline=$(boot_cmdline); then
+    [ "$running_iso" -eq 0 ] && { ok "dwc_otg keeps isochronous transfers out of its FIQ"; return; }
+    warn "Add $DWC_OTG_ARG to the kernel command line yourself, then reboot: no cmdline.txt was found in /boot/firmware or /boot.
+$DWC_OTG_WHY"
+    return
+  fi
+  if real_system && ! is_root; then
+    [ "$running_iso" -eq 0 ] && { ok "dwc_otg keeps isochronous transfers out of its FIQ"; return; }
+    warn "Run install.sh as root (it adds $DWC_OTG_ARG to $cmdline), then reboot; until then calls through a USB-audio modem fail after a few calls.
+$DWC_OTG_WHY"
+    return
+  fi
+  file=$(sysfile "$cmdline")
+  line=$(head -n 1 "$file")
+  line=${line%$'\r'}
+  value=$(printf '%s\n' "$line" | tr ' ' '\n' | sed -n 's/^dwc_otg\.fiq_fsm_mask=//p' | tail -1)
+  if [ -n "$value" ] && ! fiq_mask_has_iso "$value"; then
+    boot_arg=dwc_otg.fiq_fsm_mask=$value
+    ok "$cmdline sets $boot_arg"
+  else
+    if [ -n "$value" ]; then
+      new=$(printf '%s\n' "$line" | sed -E "s/(^| )dwc_otg\.fiq_fsm_mask=[^ ]*/\1$DWC_OTG_ARG/g")
+    else
+      new="${line%"${line##*[! ]}"} $DWC_OTG_ARG"
+    fi
+    # The boot partition is FAT: a copy of the original once, then a whole new file renamed over the old one.
+    [ -e "$file.before-aster" ] || cp "$file" "$file.before-aster" || die "cannot back up $file"
+    { printf '%s\n' "$new"; tail -n +2 "$file"; } > "$file.tmp.$$" || die "cannot write $file.tmp.$$"
+    mv -f "$file.tmp.$$" "$file" || die "cannot replace $file"
+    did "added $DWC_OTG_ARG to $cmdline (the original is in $cmdline.before-aster)"
+  fi
+  if [ "$running_iso" -eq 1 ]; then
+    warn "REBOOT THIS HOST: $cmdline sets $boot_arg but the running kernel does not use it yet, so calls through a USB-audio (UAC) modem fail after a few calls.
+$DWC_OTG_WHY"
+  else
+    ok "the running kernel keeps isochronous transfers out of dwc_otg's FIQ"
+  fi
+}
+
 # ---- 7. compose, host scripts, wrapper --------------------------------------------------------------------------
 
 # .env is install/env.example with this host's values filled in, so new keys and their comments reach it on a re-run.
@@ -882,6 +1002,7 @@ render_manager_conf
 install_udev
 install_usb_audio_mode
 install_containerd_tmpdir
+install_dwc_otg_option
 install_runtime
 sd_tuning
 bring_up
@@ -889,8 +1010,9 @@ bring_up
 if [ "$SKIP_UP" -eq 0 ]; then
   step "doctor"
   # No write-rate sample here: `aster doctor` measures it when asked.
-  "$SELF/bin/doctor.sh" --home "$HOME_DIR" --write-seconds 0 || warn "doctor.sh reported problems"
+  "$SELF/bin/doctor.sh" --home "$HOME_DIR" --write-seconds 0 || warn "aster doctor found problems: its summary above lists them"
 fi
 
+warnings_summary
 say ""
 say "CHANGED=$CHANGED"
