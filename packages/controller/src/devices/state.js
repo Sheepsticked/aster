@@ -143,9 +143,9 @@ export const DRIVER_STATES = Object.freeze(/** @type {Readonly<Record<string, Ui
   'SMS': 'busy',
 }));
 /** Operation kinds whose end changes what ShowDevices reports. */
-const REFRESH_AFTER = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'modem-remove', 'registry-apply', 'remap', 'scan']);
+const REFRESH_AFTER = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'modem-remove', 'registry-apply', 'remap', 'scan', 'volte']);
 /** Operation kinds that restart, stop or start the one modem they name; its Disconnects meanwhile are theirs, not flapping. */
-const RESTARTS_ONE = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'remap']);
+const RESTARTS_ONE = new Set(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'remap', 'volte']);
 /** How long a running operation may keep a modem's Disconnects from counting when its end is never seen. */
 const RUNNING_QUIET_MS = 10 * 60_000;
 const IMEI = /^[0-9]{15}$/;

@@ -560,6 +560,29 @@ test.describe('the modem page', () => {
     await expect(missing.getByRole('alert')).toContainText('Device not connected', { timeout: 15_000 });
   });
 
+  test('VoLTE: shows what the modem reads, saves a mode after asking, and only a Quectel modem has it', async ({ page }, info) => {
+    await page.goto('/modems/gsm1');
+    const box = await openSection(page, 'modem-volte');
+    await expect(box.getByText(ru['volte.state_not_ready'])).toBeVisible();
+    await expect(box.getByText(ru['volte.mode_now'].replace('{mode}', ru['volte.mode_default']))).toBeVisible();
+    const save = box.getByRole('button', { name: ru['volte.save'] });
+    await expect(save).toBeDisabled();
+    await box.getByLabel(ru['volte.mode'], { exact: true }).selectOption('on');
+    await save.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByText(ru['volte.confirm_title'].replace('{id}', 'gsm1').replace('{mode}', ru['volte.mode_on']))).toBeVisible();
+    await dialog.getByRole('button', { name: ru['volte.save'] }).click();
+    await expect(box.getByText(ru['volte.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(box.getByText(ru['volte.state_ready'])).toBeVisible();
+    await expect(box.getByText(ru['volte.profile'].replace('{profile}', 'ROW_Generic_3GPP'), { exact: false })).toBeVisible();
+    await expect(save).toBeDisabled();
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-volte.png`, fullPage: true });
+
+    await page.goto('/modems/gsm2');
+    await expect(page.locator('#modem-forwarding')).toBeVisible();
+    await expect(page.locator('#modem-volte')).toHaveCount(0);
+  });
+
   test('shows forwarding only when the modem confirmed it', async ({ page }, info) => {
     // gsm2 has no SIM, so its query is never answered and no number may be shown.
     await page.goto('/modems/gsm2');

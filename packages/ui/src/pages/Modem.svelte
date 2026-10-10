@@ -1,5 +1,5 @@
 <!-- Modem detail page in collapsible sections: registry fields (only changes are sent, one registry-apply), the phone number,
-     device actions, and AT/USSD/forwarding operations. Forwarding shows only states the modem verified via a +CCFC query. -->
+     device actions, VoLTE, and AT/USSD/forwarding operations. Forwarding shows only states the modem verified via a +CCFC query. -->
 <script>
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
@@ -31,6 +31,8 @@
   const FORWARD_TIMED = Object.freeze(['no_reply', 'conditional']);
   const FORWARD_TIMES = Object.freeze([5, 10, 15, 20, 25, 30]);
   const USSD_CODE = /^[0-9*#]{1,64}$/;
+  /** The VoLTE settings a Quectel modem keeps (at/volte.js). */
+  const VOLTE_MODES = Object.freeze(['default', 'on', 'off']);
   const OWN_NUMBER = /^\+[0-9]{6,15}$/;
   /** Action rows: on/off, then recovery. `when` applies only to actions that can wait for a call to end. */
   const ACTION_ROWS = Object.freeze([['start', 'stop'], ['restart', 'reset', 'remap']]);
@@ -92,6 +94,17 @@
   let ussdProblem = $state(null);
   /** @type {string | null} */
   let ussdNote = $state(null);
+  /** VoLTE as the newest VoLTE operation read it from the modem; undefined until fetched, null when never read. */
+  let volte = $state(/** @type {any} */ (undefined));
+  /** The mode picked in the form; null follows what the modem has. */
+  let volteMode = $state(/** @type {string | null} */ (null));
+  let volteBusy = $state(/** @type {'check' | 'save' | null} */ (null));
+  let volteConfirm = $state(false);
+  /** @type {string | null} */
+  let volteProblem = $state(null);
+  /** @type {string | null} */
+  let volteNote = $state(null);
+  const volteChoice = $derived(volteMode ?? volte?.mode ?? 'default');
   /** The Phone number field: filled once, from the number entered by hand or else the one the SIM reports. */
   let ownNumber = $state(/** @type {string | null} */ (null));
   let numberBusy = $state(/** @type {'save' | 'sim' | null} */ (null));
@@ -152,6 +165,14 @@
   /** The phones that dial out through this modem: deleting it leaves them internal only. */
   const dialingOut = $derived(phones.filter((phone) => phone.outbound === id).map((phone) => phone.number));
 
+  async function loadVolte() {
+    try {
+      volte = (await api.volte(id))?.volte ?? null;
+    } catch {
+      volte = null; // the section then offers Check
+    }
+  }
+
   async function loadDevices() {
     try {
       devices = (await api.scanLatest())?.scan?.unassigned ?? [];
@@ -167,6 +188,7 @@
     void load();
     void loadPhones();
     void loadDevices();
+    void loadVolte();
   });
 
   /** The modem as it is now: what was fetched, with the newest observation of the stream over it. */
@@ -376,6 +398,49 @@
       await load();
     } finally {
       forwardingBusy = false;
+    }
+  }
+
+  /** Reads VoLTE from the modem again; `quiet` for the read the page makes by itself, whose failure only leaves it unread. */
+  async function checkVolte(quiet = false) {
+    if (volteBusy !== null) return;
+    volteProblem = null;
+    volteNote = null;
+    volteBusy = 'check';
+    try {
+      const run = await runOperation(() => api.runVolte(id, {}));
+      if (run.result?.volte) volte = run.result.volte;
+      if (!quiet && run.status !== 'done') volteProblem = run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain'));
+    } finally {
+      volteBusy = null;
+    }
+  }
+
+  // A connected Quectel modem that was never read is read once when the page opens.
+  let volteAsked = false;
+  $effect(() => {
+    if (volteAsked || volte !== null || shown?.driver !== 'quectel' || shown.state !== 'ready') return;
+    volteAsked = true;
+    void checkVolte(true);
+  });
+
+  /** Saves the mode in the modem, which restarts it; the result is what the modem reads afterwards (at/volte.js). */
+  async function saveVolte() {
+    const mode = volteChoice;
+    volteBusy = 'save';
+    volteProblem = null;
+    volteNote = null;
+    try {
+      const run = await runOperation(() => api.runVolte(id, { mode }));
+      volteConfirm = false;
+      if (run.result?.volte) volte = run.result.volte;
+      if (run.status === 'done') {
+        volteMode = null;
+        volteNote = (run.result?.changed?.length ?? 0) === 0 ? t('volte.unchanged') : t('volte.saved');
+      } else volteProblem = run.error ?? (run.status === 'pending' ? t('op.still_running') : t('op.uncertain'));
+      await load();
+    } finally {
+      volteBusy = null;
     }
   }
 
@@ -830,6 +895,49 @@
         </div>
       </Section>
 
+      {#if shown.driver === 'quectel'}
+        <Section id="modem-volte" title={t('volte.title')} subtitle={t('volte.hint')}>
+          <div class="flex flex-col gap-3">
+            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm" role="status">
+              {#if !volte}
+                <p class="text-slate-600">{t('volte.never')}</p>
+              {:else}
+                <p class="font-medium">{volte.ready === true ? t('volte.state_ready') : volte.ready === false ? t('volte.state_not_ready') : t('volte.state_unknown')}</p>
+                <p class="text-slate-600">{t('volte.mode_now', { mode: t(`volte.mode_${volte.mode ?? 'unknown'}`) })}</p>
+                <p class="text-xs text-slate-500">{t('volte.profile', { profile: volte.profile ?? t('volte.no_profile') })} · {t('volte.checked', { when: dateTime(volte.observed_at) })}</p>
+              {/if}
+            </div>
+            {#if volte?.mode === 'on' && volte.ready === false}
+              <p class="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">{t('volte.not_ready_on')}</p>
+            {/if}
+            <Field id="volte-mode" label={t('volte.mode')} hint={t('volte.mode_hint')}>
+              {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+                <select id="volte-mode" class="input" value={volteChoice} onchange={(event) => (volteMode = event.currentTarget.value)} aria-describedby={field.describedBy}>
+                  {#each VOLTE_MODES as mode (mode)}
+                    <option value={mode}>{t(`volte.mode_${mode}`)}</option>
+                  {/each}
+                </select>
+              {/snippet}
+            </Field>
+            {#if volteProblem !== null}
+              <p class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-900" role="alert">{volteProblem}</p>
+            {/if}
+            {#if volteNote !== null}
+              <p class="text-sm text-slate-600" role="status">{volteNote}</p>
+            {/if}
+            <!-- Save restarts the modem, so it asks first and stays off while the modem already has the mode picked. -->
+            <div class="flex flex-col gap-2 sm:flex-row">
+              <button type="button" class="btn btn-primary w-full sm:w-auto" disabled={volteBusy !== null || volteChoice === volte?.mode} onclick={() => (volteConfirm = true)}>
+                {volteBusy === 'save' ? t('common.working') : t('volte.save')}
+              </button>
+              <button type="button" class="btn btn-plain w-full sm:w-auto" disabled={volteBusy !== null} onclick={() => checkVolte()}>
+                {volteBusy === 'check' ? t('common.working') : t('volte.check')}
+              </button>
+            </div>
+          </div>
+        </Section>
+      {/if}
+
       <Section id="modem-forwarding" title={t('forwarding.title')} subtitle={t('forwarding.hint')}>
         <div class="flex flex-col gap-3">
           <!-- Only a state the modem answered in a query is shown as verified. -->
@@ -1014,6 +1122,15 @@
   confirmLabel={t('number.to_sim')}
   busy={numberBusy === 'sim'}
   onconfirm={writeToSim}
+/>
+
+<Confirm
+  bind:open={volteConfirm}
+  title={t('volte.confirm_title', { id, mode: t(`volte.mode_${volteChoice}`) })}
+  text={t('volte.confirm_text')}
+  confirmLabel={t('volte.save')}
+  busy={volteBusy === 'save'}
+  onconfirm={saveVolte}
 />
 
 <Confirm

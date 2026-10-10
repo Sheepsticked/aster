@@ -22,6 +22,8 @@ const DRIVERS = Object.freeze({ quectel: 'aster.d/quectel-devices.conf', dongle:
 /** What a started device with a SIM reports. */
 const RUNNING = Object.freeze({ state: 'Free', current: 'start', desired: 'start', rssi: '21, -71 dBm',
   gsmReg: 'Registered, home network', provider: 'Operator', number: '+1234567890' });
+/** How long a modem is away after a reset before the driver connects it again. */
+const RESET_MS = 1_500;
 
 /** @typedef {import('../log.js').Logger} Logger */
 /** @typedef {Map<string, string>} Packet  the headers of one request, by their own case */
@@ -43,9 +45,10 @@ export const USSD_MENU = '*111#';
  * @param {{ name: string, driver: 'quectel' | 'dongle', started: boolean, radio: string, imei: string, imsi: string, data: string, audio: string }} device
  * @param {string} actionId
  * @param {string | null} own  the number in the SIM's own-number list, which the driver reads with AT+CNUM
+ * @param {boolean} [restarting]  reset and not connected again yet
  */
-function deviceEntry(device, actionId, own) {
-  const on = device.started;
+function deviceEntry(device, actionId, own, restarting = false) {
+  const on = device.started && !restarting;
   // radio=off (a disabled modem): the driver keeps it connected and identified but never initializes it
   const off = on && device.radio === 'off';
   const up = on && !off;
@@ -62,7 +65,7 @@ function deviceEntry(device, actionId, own) {
     ['Context', `aster-in-${device.name}`],
     ['Group', '1'],
     ['RadioSetting', device.radio],
-    ['State', off ? 'Radio off' : on ? RUNNING.state : 'Stopped'],
+    ['State', off ? 'Radio off' : on ? RUNNING.state : restarting ? 'Not connected' : 'Stopped'],
     ['AudioState', on ? device.audio : ''],
     ['DataState', on ? device.data : ''],
     ['Voice', up ? 'Yes' : 'No'],
@@ -147,6 +150,17 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
   const forwarding = new Map();
   /** The devices whose USSD menu waits for an answer; an answer or AT+CUSD=2 closes it. */
   const menus = new Set();
+  /** The devices that were reset and are not connected again yet. */
+  const restarting = new Set();
+  /** Each Quectel modem's VoLTE: the mode it keeps, the one in use since its last restart, and its operator profiles (at/volte.js). */
+  /** @type {Map<string, { saved: number, used: number, profiles: { name: string, selected: boolean, active: boolean }[] }>} */
+  const voltes = new Map();
+  /** @param {string} name */
+  const volte = (name) => {
+    const found = voltes.get(name) ?? { saved: 0, used: 0, profiles: ['ROW_Generic_3GPP', 'Commercial-DT'].map((profile) => ({ name: profile, selected: false, active: false })) };
+    voltes.set(name, found);
+    return found;
+  };
   /** Each SIM's own-number list and the phonebook selected (AT+CPBS/CPBW/CPBR/CNUM); a SIM starts with RUNNING.number in it. */
   /** @type {Map<string, { storage: string, own: string | null }>} */
   const phonebooks = new Map();
@@ -322,7 +336,7 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
         const listed = [...devices.values()]
           .filter((device) => device.driver === driver && (only === undefined || only === '' || device.name === only));
         send([['Response', 'Success'], ['ActionID', actionId], ['EventList', 'start'], ['Message', 'Device status list will follow']]);
-        for (const device of listed) send(deviceEntry(device, actionId, phonebook(device.name).own));
+        for (const device of listed) send(deviceEntry(device, actionId, phonebook(device.name).own, restarting.has(device.name)));
         send([['Event', `${p}ShowDevicesComplete`], ['ActionID', actionId], ['EventList', 'Complete'], ['ListItems', String(listed.length)]]);
         return;
       }
@@ -353,8 +367,21 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
         return;
       }
       if (verb === 'Reset') {
-        if (!device.started) return fail(actionId, `[${name}] Device disconnected`);
+        if (!device.started || restarting.has(name)) return fail(actionId, `[${name}] Device disconnected`);
         ok(actionId, `[${name}] Reset command queued for execute`);
+        // The modem drops off, boots with the settings it keeps, and the driver connects it again.
+        const status = (/** @type {string} */ value) => send([['Event', `${p}Status`], ['Privilege', 'call,all'], ['Device', name], ['Status', value]]);
+        setTimeout(() => {
+          restarting.add(name);
+          status('Disconnect');
+          setTimeout(() => {
+            restarting.delete(name);
+            const kept = volte(name);
+            kept.used = kept.saved;
+            for (const profile of kept.profiles) profile.active = profile.selected;
+            status('Connect');
+          }, RESET_MS).unref();
+        }, 100).unref();
         return;
       }
       if (verb === 'SendSMS') {
@@ -399,7 +426,7 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
         fail(actionId, 'Command not specified');
         return;
       }
-      if (!device.started) {
+      if (!device.started || restarting.has(device.name)) {
         fail(actionId, `[${device.name}] Device not connected`);
         return;
       }
@@ -432,6 +459,20 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
       } else if (upper === 'AT+CNUM') lines = book.own === null ? [] : [`+CNUM: ,"${book.own}",145`];
       else if (upper === 'AT+CUSD=2') menus.delete(device.name);
       else if (upper.startsWith('AT+CIMI')) lines = [device.imsi];
+      else if (driver === 'quectel' && upper.startsWith('AT+QCFG="IMS"')) {
+        const kept = volte(device.name);
+        const mode = /^AT\+QCFG="IMS",([0-2])$/.exec(upper)?.[1];
+        if (mode !== undefined) kept.saved = Number(mode);
+        else if (upper === 'AT+QCFG="IMS"') lines = [`+QCFG: "ims",${kept.saved},${kept.used === 1 && kept.profiles.some((profile) => profile.active) ? 1 : 0}`];
+        else error = 'ERROR';
+      } else if (driver === 'quectel' && upper === 'AT+QMBNCFG="LIST"') {
+        lines = volte(device.name).profiles.map((profile, index) => `+QMBNCFG: "List",${index},${profile.selected ? 1 : 0},${profile.active ? 1 : 0},"${profile.name}",0x0501081F,201901141`);
+      } else if (driver === 'quectel' && upper.startsWith('AT+QMBNCFG="SELECT",')) {
+        const wanted = /^AT\+QMBNCFG="Select","([^"]+)"$/i.exec(command)?.[1];
+        const profiles = volte(device.name).profiles;
+        if (wanted !== undefined && profiles.some((profile) => profile.name === wanted)) for (const profile of profiles) profile.selected = profile.name === wanted;
+        else error = 'ERROR';
+      }
       else if (upper.startsWith('AT+CCFC=')) {
         // A mutation changes what later queries answer, as on a modem: reason 4 covers 0–3, reason 5 covers 1–3.
         const [, reason = '', mode = '', number = null, time = null] = /^AT\+CCFC=(\d),(\d)(?:,"(\+[0-9]{6,15})",145(?:,7,,,(\d+))?)?/.exec(upper) ?? [];

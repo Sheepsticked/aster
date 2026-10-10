@@ -2,11 +2,12 @@
 // Aster controller — the modem routes. Registry changes (assign, edit, delete) go through one registry-apply and wait;
 // device actions (start, stop, AT, USSD, ...) answer 202 at once and are followed on /api/events.
 import { TIMED } from '../../at/forwarding.js';
+import { latest as latestVolte } from '../../at/volte.js';
 import { assignWithStarterPhones } from '../../config/starter.js';
 import { lastDriverError } from '../../logs/driver.js';
 import { start as startOp, applyRegistry, loadForChange } from '../ops.js';
 import { action as actionSchema, at as atSchema, create, forwarding as forwardingSchema, idParam, remove, simNumber as simNumberSchema,
-  update, ussd as ussdSchema, ussdCancel as ussdCancelSchema } from '../schemas/modems.js';
+  update, ussd as ussdSchema, ussdCancel as ussdCancelSchema, volte as volteSchema } from '../schemas/modems.js';
 
 /** The device actions and the operation kind each one enqueues; `modem-remove` is reconcile's, not the API's. */
 export const ACTIONS = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
@@ -223,6 +224,26 @@ export function modemRoutes(app, ctx) {
     if (!found) return reply;
     const operation = startOp(ctx, { kind: 'sim-number', modemId: id, params: { number: body.number }, actor: 'admin' });
     ctx.log.info('SIM number write queued', { modem: id, operation: operation.id });
+    return reply.code(202).send({ operation });
+  });
+
+  // VoLTE lives in the modem: GET is what the last VoLTE operation read, POST reads it again or changes it (at/volte.js).
+  app.get('/api/modems/:id/volte', { schema: { params: idParam } }, async (request, reply) => {
+    const found = find(/** @type {any} */ (request.params).id, reply);
+    if (!found) return reply;
+    return reply.send({ modem_id: found.modem.id, volte: found.modem.driver === 'quectel' ? latestVolte(ctx.db, found.modem.id) : null });
+  });
+
+  app.post('/api/modems/:id/volte', { schema: volteSchema }, async (request, reply) => {
+    const id = /** @type {any} */ (request.params).id;
+    const body = /** @type {{ mode?: string }} */ (request.body ?? {});
+    const found = find(id, reply);
+    if (!found) return reply;
+    if (found.modem.driver !== 'quectel') return reply.code(409).send({ error: `VoLTE is a setting of Quectel modems; ${id} uses chan_${found.modem.driver}` });
+    const operation = body.mode === undefined
+      ? startOp(ctx, { kind: 'volte-query', modemId: id, params: {}, actor: 'admin' })
+      : startOp(ctx, { kind: 'volte', modemId: id, params: { mode: body.mode }, actor: 'admin' });
+    ctx.log.info('VoLTE operation queued', { modem: id, mode: body.mode ?? null, operation: operation.id });
     return reply.code(202).send({ operation });
   });
 

@@ -128,6 +128,10 @@ export const api = {
   ussdCancel: (id) => post(`/modems/${seg(id)}/ussd/cancel`),
   /** Writes the number into the SIM's own-number list. @param {string} id @param {{ number: string }} body */
   simNumber: (id, body) => post(`/modems/${seg(id)}/sim-number`, body),
+  /** What the last VoLTE operation read from the modem. @param {string} id */
+  volte: (id) => get(`/modems/${seg(id)}/volte`),
+  /** Reads VoLTE again (no mode) or changes it, which restarts the modem. @param {string} id @param {{ mode?: 'default' | 'on' | 'off' }} body */
+  runVolte: (id, body) => post(`/modems/${seg(id)}/volte`, body),
 
   phones: () => get('/phones'),
   /** @param {Record<string, unknown>} fields */

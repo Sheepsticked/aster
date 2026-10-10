@@ -46,6 +46,8 @@ const state = {
     },
     gsm2: null,
   }),
+  // What the last VoLTE read found per Quectel modem; gsm1 was read once, with no operator profile in use.
+  volte: /** @type {Record<string, any>} */ ({ gsm1: { mode: 'default', ready: false, profile: null, selected: null, observed_at: Date.now() - 3_600_000 } }),
   /** the modems whose USSD menu waits for an answer @type {Set<string>} */
   ussdMenus: new Set(),
   operations: new Map(),
@@ -598,7 +600,24 @@ function modemRoute(method, id, verb, body) {
     const failing = id === 'gsm2';
     return json({ modem_id: id, error: failing ? { at: Date.now() - 9_000, level: 'ERROR', text: 'Getting IMSI number failed', count: 240 } : null });
   }
-  if (method !== 'POST' && !(method === 'GET' && verb === 'forwarding')) return error(`unknown endpoint: ${method} /api/modems/${id}/${verb}`, 404);
+  if (method !== 'POST' && !(method === 'GET' && (verb === 'forwarding' || verb === 'volte'))) return error(`unknown endpoint: ${method} /api/modems/${id}/${verb}`, 404);
+
+  if (verb === 'volte') {
+    if (method === 'GET') return json({ modem_id: id, volte: modem.driver === 'quectel' ? state.volte[id] ?? null : null });
+    if (modem.driver !== 'quectel') return error(`VoLTE is a setting of Quectel modems; ${id} uses chan_${modem.driver}`, 409);
+    const mode = body?.mode;
+    if (mode !== undefined && !['default', 'on', 'off'].includes(mode)) return error('body/mode must be equal to one of the allowed values', 400);
+    const kind = mode === undefined ? 'volte-query' : 'volte';
+    if (modem.state === 'flapping') return json({ operation: operation(kind, id, { status: 'failed', error: `AT+QCFG="ims": [${id}] Device not connected; nothing was read` }) }, 202);
+    const before = state.volte[id] ?? { mode: 'default', ready: false, profile: null, selected: null };
+    const changed = mode === undefined || mode === before.mode ? [] : [...(mode === 'on' && before.profile === null ? ['profile'] : []), 'mode'];
+    // On selects the generic profile when none is in use; the modem restarts for a change, which takes longer than a read.
+    const profile = changed.includes('profile') ? 'ROW_Generic_3GPP' : before.profile;
+    const after = { mode: mode ?? before.mode, ready: (mode ?? before.mode) === 'on' && profile !== null, profile, selected: profile, observed_at: Date.now() };
+    state.volte[id] = after;
+    return json({ operation: operation(kind, id, { result: { modem_id: id, mode: mode ?? null, changed, reset: changed.length > 0, volte: after, transactions: [] },
+      delayMs: changed.length > 0 ? OPERATION_MS * 3 : OPERATION_MS }) }, 202);
+  }
 
   if (verb === 'forwarding') {
     if (method === 'GET') return json({ modem_id: id, forwarding: state.forwarding[id] ?? null });

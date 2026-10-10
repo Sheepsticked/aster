@@ -91,6 +91,12 @@ export const simNumber = ({
   body: { type: 'object', required: ['number'], additionalProperties: false, properties: { number: OWN_NUMBER } },
 });
 
+/** POST /api/modems/:id/volte: a mode changes the setting (and resets the modem), no mode only reads it (at/volte.js). */
+export const volte = ({
+  params: idParam,
+  body: { type: 'object', additionalProperties: false, properties: { mode: { enum: ['default', 'on', 'off'] } } },
+});
+
 /** POST /api/modems/:id/at (at/client.js checks the command text and the timeout again inside the operation). */
 export const at = ({
   params: idParam,

@@ -11,6 +11,7 @@ import { DEFAULTS as REGISTRY_DEFAULTS, load as loadRegistry, validate } from '.
 import { createAtOps } from './at/client.js';
 import { createForwardingOps } from './at/forwarding.js';
 import { createSimNumberOps } from './at/simnumber.js';
+import { createVolteOps } from './at/volte.js';
 import { createUssdOps } from './at/ussd.js';
 import { createLifecycleOps } from './devices/lifecycle.js';
 import { createRemapOps } from './devices/remap.js';
@@ -135,6 +136,7 @@ async function main() {
   createForwardingOps({ db, registry, log: atLog }).register(runner);
   createUssdOps({ registry, log: atLog }).register(runner);
   createSimNumberOps({ registry, log: atLog }).register(runner);
+  createVolteOps({ registry, log: atLog }).register(runner);
   const reports = ami ? createReportListener({ ami, db, log: smsLog }) : null;
   const connections = ami ? watchConnections({ ami, bus }) : null;
   const devices = createDeviceState({

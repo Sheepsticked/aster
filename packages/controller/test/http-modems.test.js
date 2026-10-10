@@ -343,4 +343,37 @@ describe('http modem routes', () => {
       await h.stop();
     }
   });
+
+  test('VoLTE: GET is what the newest VoLTE operation read, POST reads or changes it, and only on a Quectel modem', async () => {
+    const h = await harness({ registry: { ...REGISTRY, modems: [MODEM, NEW] } });
+    try {
+      const { cookie } = await h.login();
+      const get = async (/** @type {string} */ id) => (await h.app.inject({ method: 'GET', url: `/api/modems/${id}/volte`, headers: { cookie } })).json();
+      assert.deepEqual(await get('gsm1'), { modem_id: 'gsm1', volte: null });
+      const insert = h.db.prepare('INSERT INTO operations (kind, modem_id, status, result_json, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+      const older = { mode: 'default', ready: false, profile: null, selected: null, observed_at: 10 };
+      const newer = { mode: 'on', ready: true, profile: 'ROW_Generic_3GPP', selected: 'ROW_Generic_3GPP', observed_at: 20 };
+      insert.run('volte-query', 'gsm1', 'done', JSON.stringify({ volte: older }), 'admin', 10);
+      insert.run('volte', 'gsm1', 'uncertain', JSON.stringify({ volte: newer }), 'admin', 20);
+      insert.run('volte', 'gsm1', 'failed', JSON.stringify({ volte: null }), 'admin', 30);
+      assert.deepEqual(await get('gsm1'), { modem_id: 'gsm1', volte: newer }, 'the newest operation that read something');
+
+      const read = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/volte', headers: { cookie }, payload: {} });
+      assert.equal(read.statusCode, 202);
+      assert.equal(read.json().operation.kind, 'volte-query');
+      const set = await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/volte', headers: { cookie }, payload: { mode: 'off' } });
+      assert.equal(set.statusCode, 202);
+      assert.deepEqual([set.json().operation.kind, h.opsOf('volte').at(-1)?.params], ['volte', { mode: 'off' }]);
+      for (const payload of [{ mode: 'auto' }, { mode: 1 }, { mode: 'on', profile: 'ROW_Generic_3GPP' }]) {
+        assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm1/volte', headers: { cookie }, payload })).statusCode, 400, JSON.stringify(payload));
+      }
+      const dongle = await h.app.inject({ method: 'POST', url: '/api/modems/gsm2/volte', headers: { cookie }, payload: { mode: 'on' } });
+      assert.deepEqual([dongle.statusCode, dongle.json().error], [409, 'VoLTE is a setting of Quectel modems; gsm2 uses chan_dongle']);
+      assert.deepEqual(await get('gsm2'), { modem_id: 'gsm2', volte: null });
+      assert.equal((await h.app.inject({ method: 'POST', url: '/api/modems/gsm9/volte', headers: { cookie }, payload: {} })).statusCode, 404);
+      assert.deepEqual([h.opsOf('volte').length, h.opsOf('volte-query').length], [2 + 1, 1 + 1], 'the inserted rows and one queued each');
+    } finally {
+      await h.stop();
+    }
+  });
 });
