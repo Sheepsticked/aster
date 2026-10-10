@@ -583,6 +583,15 @@ test.describe('the modem page', () => {
     await expect(page.locator('#modem-volte')).toHaveCount(0);
   });
 
+  test('the status names the network the modem uses, and a dash before the modem has named one', async ({ page }) => {
+    await page.goto('/modems/gsm1');
+    const network = page.locator('#modem-network');
+    await expect(network).toHaveText('4G · LTE band 3');
+    await expect(network).toHaveAttribute('title', new RegExp(`^${ru['modem.network_read'].replace('{when}', '')}`));
+    await page.goto('/modems/gsm2');
+    await expect(page.locator('#modem-network')).toHaveText('—');
+  });
+
   test('shows forwarding only when the modem confirmed it', async ({ page }, info) => {
     // gsm2 has no SIM, so its query is never answered and no number may be shown.
     await page.goto('/modems/gsm2');

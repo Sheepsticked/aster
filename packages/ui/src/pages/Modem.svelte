@@ -197,7 +197,17 @@
     const seen = live.modems[modem.id];
     if (!seen) return modem;
     return { ...modem, state: seen.state ?? modem.state, rssi: seen.rssi, provider: seen.provider, number: seen.number,
-      data_tty: seen.data_tty, observed_at: seen.observed_at, detail: seen.detail ?? modem.detail };
+      data_tty: seen.data_tty, observed_at: seen.observed_at, network: 'network' in seen ? seen.network : modem.network,
+      detail: seen.detail ?? modem.detail };
+  });
+
+  /** The network the modem last named: 4G · LTE band 3, 3G · HSPA+ · WCDMA 2100. The technology is left out when the band names it. */
+  const network = $derived.by(() => {
+    const read = shown?.network;
+    if (!read) return null;
+    if (!read.service) return t('modem.network_none');
+    const tech = read.tech && !(read.band && read.tech.toUpperCase().includes(read.band.split(' ')[0].toUpperCase())) ? read.tech : null;
+    return [read.generation, tech, read.band].filter(Boolean).join(' · ') || null;
   });
 
   /** Summary radio line: a disabled modem keeps its radio off, confirmed only by the driver's `Radio off` state.
@@ -614,6 +624,10 @@
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('modem.provider')}</dt>
             <dd class="min-w-0 truncate">{orNone(shown.provider)}</dd>
+          </div>
+          <div class="flex items-center justify-between gap-3">
+            <dt class="text-slate-500">{t('modem.network')}</dt>
+            <dd id="modem-network" class="min-w-0 truncate" title={shown.network ? t('modem.network_read', { when: ago(shown.network.observed_at) }) : undefined}>{orNone(network)}</dd>
           </div>
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('modem.number')}</dt>

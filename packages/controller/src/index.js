@@ -10,6 +10,7 @@ import { createConfigOps } from './config/apply.js';
 import { DEFAULTS as REGISTRY_DEFAULTS, load as loadRegistry, validate } from './config/registry.js';
 import { createAtOps } from './at/client.js';
 import { createForwardingOps } from './at/forwarding.js';
+import { createNetworkReader } from './at/network.js';
 import { createSimNumberOps } from './at/simnumber.js';
 import { createVolteOps } from './at/volte.js';
 import { createUssdOps } from './at/ussd.js';
@@ -146,7 +147,9 @@ async function main() {
     onRemapNeeded: (modemId, reason) => {
       if (ami?.connected) remapOps.trigger(modemId, reason, db);
     },
+    network: (modemId) => network.get(modemId),
   });
+  const network = createNetworkReader({ ami, registry, states: () => devices.states(), onChange: () => devices.schedule(), log: atLog });
   const notifyLog = log.child({ module: 'notify' });
   /** @type {import('./spool/ingest.js').Hooks} */
   const hooks = { ...createIngestHooks({ registry, bus, log: notifyLog }), applyReport: (report, ctx) => void applyReport(ctx.db, report, { log: smsLog }) };
@@ -159,11 +162,12 @@ async function main() {
   const operations = runner.start();
   alerts.start(); // before the refresher publishes its first modem.state events
   devices.start();
+  network.start();
   notify.start();
   const retention = startRetention(db, { days: () => retentionDays(env.paths.registry), log: log.child({ module: 'retention' }) });
   const rotation = ami ? startLogRotation({ ami, path: asteriskLog, log: log.child({ module: 'logs' }) }) : null;
   const http = createServer({
-    db, bus, runner, registry, secrets, devices, scan: scanOps, outbox, notify, logRing: ring, ami, startedAt,
+    db, bus, runner, registry, secrets, devices, network, scan: scanOps, outbox, notify, logRing: ring, ami, startedAt,
     paths: { home: env.home, spool: env.paths.spool, state: env.paths.state, registry: env.paths.registry,
       asteriskConfig: env.paths.asteriskConfig, prev: env.paths.prev, asteriskLog },
     uiDir: env.uiDir, host: env.http.host, port: env.http.port, log: log.child({ module: 'http' }),
@@ -187,6 +191,7 @@ async function main() {
     stopping = true;
     clearInterval(heartbeat);
     await http.close();
+    await network.stop();
     await devices.stop();
     alerts.stop();
     scanOps.stop();

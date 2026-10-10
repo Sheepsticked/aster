@@ -459,6 +459,8 @@ export function startMockAmi({ configDir, log = SILENT, host = '127.0.0.1', port
       } else if (upper === 'AT+CNUM') lines = book.own === null ? [] : [`+CNUM: ,"${book.own}",145`];
       else if (upper === 'AT+CUSD=2') menus.delete(device.name);
       else if (upper.startsWith('AT+CIMI')) lines = [device.imsi];
+      else if (driver === 'quectel' && upper === 'AT+QNWINFO') lines = ['+QNWINFO: "FDD LTE","00101","LTE BAND 3",1300'];
+      else if (driver === 'dongle' && upper === 'AT^SYSINFO') lines = ['^SYSINFO:2,3,0,5,1,,9'];
       else if (driver === 'quectel' && upper.startsWith('AT+QCFG="IMS"')) {
         const kept = volte(device.name);
         const mode = /^AT\+QCFG="IMS",([0-2])$/.exec(upper)?.[1];

@@ -52,12 +52,13 @@ const GLOBAL = new Set(['registry-apply', 'config-apply', 'config-restore', 'rem
  * @param {Record<string, number>} [options.timing]
  * @param {{ spoolBacklog?: number, diskFreeMb?: number }} [options.thresholds]
  * @param {any} [options.devices]  a device state (the overview asks it for states() and stateOf())
+ * @param {any} [options.network]  a network reader (the modem route asks it for want())
  * @param {any} [options.scan]     scan operations (the overview asks it for latest())
  * @param {() => number} [options.now]
  */
 export async function harness(options = {}) {
   const { password = PASSWORD, secrets: extra = {}, registry: initial = REGISTRY, files = null, prev = {}, ami: withAmi = true,
-    uiDir = null, timing = {}, thresholds = { diskFreeMb: 0 }, devices = null, scan = null, now = Date.now } = options;
+    uiDir = null, timing = {}, thresholds = { diskFreeMb: 0 }, devices = null, network = null, scan = null, now = Date.now } = options;
   const dir = mkdtempSync(join(tmpdir(), 'aster-http-'));
   const paths = { home: dir, config: join(dir, 'config'), state: join(dir, 'state'), spool: join(dir, 'spool'),
     registry: join(dir, 'config', 'aster.yaml'), secrets: join(dir, 'config', 'secrets.env'), db: join(dir, 'state', 'aster.db'),
@@ -140,7 +141,7 @@ export async function harness(options = {}) {
   const logRing = createRing({ stream: null, lines: 50 });
   // host/port matter only for the tests that need a real socket (the event stream); the rest use fastify.inject().
   const server = createServer({ db, bus, runner, registry, secrets: store, ami: /** @type {any} */ (ami), paths, uiDir, now, timing,
-    thresholds, devices, scan, outbox, notify, logRing, version: '1.2.3', startedAt: now(), host: '127.0.0.1', port: 0 });
+    thresholds, devices, network, scan, outbox, notify, logRing, version: '1.2.3', startedAt: now(), host: '127.0.0.1', port: 0 });
   runner.start();
 
   /**

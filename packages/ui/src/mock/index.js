@@ -563,7 +563,7 @@ function modemPost(body) {
     id: fields.id, driver: fields.driver, imei: fields.imei, phone_number: fields.phone_number ?? null, enabled: fields.enabled ?? true,
     uac: fields.uac ?? false, usb_port: fields.usb_port ?? null, group: null, ring: [], ring_timeout: 120,
     incoming_context: null, recipients: null, ports: null, state: 'unverified', driver_state: null, gsm_registration: null,
-    rssi: null, provider: null, number: null, data_tty: null, observed_at: null, forwarding: null, detail: null,
+    rssi: null, provider: null, number: null, data_tty: null, observed_at: null, network: null, forwarding: null, detail: null,
   };
   state.modems = [...state.modems, modem];
   state.devices = state.devices.filter((device) => device.imei !== modem.imei && device.usb_port !== modem.usb_port);
@@ -795,7 +795,7 @@ function publishState(id, next) {
   modem.observed_at = Date.now();
   state.modems = [...state.modems];
   emit('modem.state', { modem_id: id, state: next, driver_state: modem.driver_state, rssi: modem.rssi, provider: modem.provider,
-    number: modem.number, data_tty: modem.data_tty, observed_at: modem.observed_at, detail: modem.detail });
+    number: modem.number, data_tty: modem.data_tty, observed_at: modem.observed_at, network: modem.network ?? null, detail: modem.detail });
 }
 
 /**

@@ -77,6 +77,9 @@
   "overview.registry_invalid": "Не удалось загрузить список модемов из-за ошибок в config/aster.yaml. Исправьте файл в разделе «Конфигурация».",
 
   "modem.provider": "Оператор",
+  "modem.network": "Сеть",
+  "modem.network_none": "Нет сети",
+  "modem.network_read": "прочитано из модема {when}",
   "modem.number": "Номер",
   "modem.number_entered": "введён вручную",
   "modem.signal": "Уровень сигнала",

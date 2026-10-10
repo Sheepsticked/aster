@@ -42,6 +42,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {string | null} firmware
  * @property {number} calls         `CallsChannels`
  * @property {string | null} radio  `RadioSetting` of the radio patches (keep | on | off); null when the driver does not report it
+ * @property {string | null} cell   `LocationAreaCode/CellID`, to notice when the modem moves to another cell
  */
 /** @typedef {'disabled' | 'unmapped' | 'unverified' | 'duplicate-imei' | 'flapping' | 'absent' | 'stopped' | 'connecting' | 'no-network' | 'ready' | 'busy'} UiState */
 /**
@@ -63,6 +64,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {string | null} vendor    of the USB device data_tty belongs to
  * @property {string | null} product
  * @property {string | null} reason    why the state is `unverified` (the driver is not loaded, does not list the device, reports an unknown state)
+ * @property {string | null} cell      DeviceEntry.cell
  * @property {import('../at/forwarding.js').ForwardingState | null} forwarding  what the forwarding operations stored; the refresh keeps it
  */
 /**
@@ -77,6 +79,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {string | null} data_tty
  * @property {string | null} usb_port  the USB port of data_tty per sysfs (null when the device has no tty or sysfs cannot place it)
  * @property {number} observed_at      epoch ms of the ShowDevices read
+ * @property {import('../at/network.js').Network | null} network  what the modem last said about its network (at/network.js)
  * @property {Detail} detail
  */
 /**
@@ -114,6 +117,7 @@ import { listUsbModems, usbPortOfTty } from './sysfs.js';
  * @property {Partial<Timing>} [timing]
  * @property {(change: { added: UsbModem[], removed: UsbModem[], present: UsbModem[] }) => void} [onUsbChange]  after a sysfs poll that saw a difference
  * @property {(modemId: string, reason: string) => void} [onRemapNeeded]  once per modem and reason (remap.js remapReason)
+ * @property {(modemId: string) => import('../at/network.js').Network | null} [network]  the network reader's reading of a modem
  */
 /** @typedef {{ skipped: string | null, modems: number, listed: number, errors: Record<Driver, string | null>, published: string[] }} RefreshResult */
 
@@ -196,6 +200,8 @@ export function parseDeviceEntry(packet, driver) {
   const provider = nullIfEmpty(header(packet, 'ProviderName'));
   const number = nullIfEmpty(header(packet, 'SubscriberNumber'));
   const calls = Number(header(packet, 'CallsChannels') ?? '0');
+  const lac = nullIfEmpty(header(packet, 'LocationAreaCode'));
+  const cellId = nullIfEmpty(header(packet, 'CellID'));
   return {
     driver,
     device: header(packet, 'Device') ?? '',
@@ -217,6 +223,7 @@ export function parseDeviceEntry(packet, driver) {
     firmware: nullIfEmpty(header(packet, 'Firmware')),
     calls: Number.isInteger(calls) ? calls : 0,
     radio: nullIfEmpty(header(packet, 'RadioSetting')),
+    cell: lac === null && cellId === null ? null : `${lac ?? ''}/${cellId ?? ''}`,
   };
 }
 
@@ -283,12 +290,12 @@ export function uiState(modem, state, seen, { now = Date.now(), staleMs = DEFAUL
  */
 const fingerprint = (row) => JSON.stringify([row.state, row.driver_state, row.gsm_reg, row.rssi, row.provider, row.number, row.data_tty, row.usb_port,
   row.detail.listed, row.detail.current, row.detail.desired, row.detail.flapping, row.detail.restarting, row.detail.imei, row.detail.radio,
-  row.detail.reason]);
+  row.detail.reason, row.network && [row.network.service, row.network.generation, row.network.tech, row.network.band]]);
 
 /**
  * @param {Options} options
  */
-export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsRoot = '/sys', now = Date.now, timing = {}, onUsbChange, onRemapNeeded }) {
+export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsRoot = '/sys', now = Date.now, timing = {}, onUsbChange, onRemapNeeded, network = () => null }) {
   const t = { ...DEFAULTS, ...timing };
   const deleteForwarding = db.prepare(DELETE_FORWARDING);
   const upsertSeen = db.prepare(UPSERT_SEEN);
@@ -564,6 +571,7 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
           vendor: usb?.vendor ?? null,
           product: usb?.product ?? null,
           reason: null,
+          cell: entry?.cell ?? null,
           forwarding: storedForwarding(modem.id),
         };
         if (!entry) detail.reason = result.errors[modem.driver] ? `${modem.driver} driver: ${result.errors[modem.driver]}` : `${modem.driver} driver does not list the device (registry not applied?)`;
@@ -579,6 +587,7 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
           data_tty: entry?.dataTty ?? null,
           usb_port: usb?.port ?? null,
           observed_at: at,
+          network: network(modem.id),
           detail,
         };
         row.state = uiState(modem, row, seenForUi, { now: at, staleMs: t.staleMs });
@@ -592,7 +601,7 @@ export function createDeviceState({ db, ami, bus, log = SILENT, registry, sysfsR
         published.set(modem.id, key);
         result.published.push(modem.id);
         bus.publish('modem.state', shown ?? { modem_id: modem.id, state: uiState(modem, null, seenForUi, { now: at, staleMs: t.staleMs }), driver_state: null, gsm_reg: null, rssi: null,
-          provider: null, number: null, data_tty: null, usb_port: null, observed_at: null, detail: null });
+          provider: null, number: null, data_tty: null, usb_port: null, observed_at: null, network: null, detail: null });
       }
     }
     for (const id of [...rows.keys()]) {

@@ -27,8 +27,11 @@ const NEW = { id: 'gsm2', driver: 'dongle', imei: '356938031234560', enabled: tr
 
 describe('http modem routes', () => {
   test('GET lists the registry modems with the state derived now, and one by id; an unknown id is 404', async () => {
-    const rows = new Map([['gsm1', row()]]);
-    const h = await harness({ devices: deviceState(rows) });
+    const network = { service: true, generation: '4G', tech: 'FDD LTE', band: 'LTE band 3', observed_at: 17 };
+    const rows = new Map([['gsm1', row({ network })]]);
+    /** @type {string[]} */
+    const wanted = [];
+    const h = await harness({ devices: deviceState(rows), network: { want: (/** @type {string} */ id) => wanted.push(id) } });
     try {
       const { cookie } = await h.login();
       const before = snapshot(h.db);
@@ -40,6 +43,8 @@ describe('http modem routes', () => {
       const one = await h.app.inject({ method: 'GET', url: '/api/modems/gsm1', headers: { cookie } });
       assert.equal(one.statusCode, 200);
       assert.deepEqual([one.json().modem.imei, one.json().modem.usb_port, one.json().modem.incoming_context], ['490154203237518', '1-1', null]);
+      assert.deepEqual([one.json().modem.network, body.modems[0].network], [network, network]);
+      assert.deepEqual(wanted, ['gsm1'], 'only the Modem page\'s own GET asks for a new reading');
 
       const missing = await h.app.inject({ method: 'GET', url: '/api/modems/nosuch', headers: { cookie } });
       assert.deepEqual([missing.statusCode, missing.json().error], [404, 'no modem nosuch in config/aster.yaml']);

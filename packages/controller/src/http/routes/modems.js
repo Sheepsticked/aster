@@ -49,6 +49,7 @@ export function modemView(modem, ctx, states) {
     number: row?.number ?? null,
     data_tty: row?.data_tty ?? null,
     observed_at: row?.observed_at ?? null,
+    network: row?.network ?? null,
     forwarding: detail?.forwarding ?? null,
     detail: detail === null ? null : {
       listed: detail.listed,
@@ -107,6 +108,8 @@ export function modemRoutes(app, ctx) {
   app.get('/api/modems/:id', { schema: { params: idParam } }, async (request, reply) => {
     const found = find(/** @type {any} */ (request.params).id, reply);
     if (!found) return reply;
+    // The Modem page is open: an old network reading is renewed and arrives as a modem.state event.
+    ctx.network?.want(found.modem.id);
     const states = ctx.devices?.states() ?? new Map();
     return reply.send({ modem: modemView(found.modem, ctx, states), registry: { hash: found.hash } });
   });

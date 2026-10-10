@@ -67,6 +67,7 @@ const modem = (fields) => ({
   number: '+1234567890',
   data_tty: '/dev/ttyUSB2',
   observed_at: Date.now() - 2 * MINUTE,
+  network: { service: true, generation: '4G', tech: 'FDD LTE', band: 'LTE band 3', observed_at: Date.now() - 2 * MINUTE },
   forwarding: null,
   detail: null,
   ...fields,
@@ -91,6 +92,7 @@ export const modems = () => [
     number: null,
     data_tty: '/dev/ttyUSB6',
     observed_at: Date.now() - 20_000,
+    network: null,
   }),
 ];
 

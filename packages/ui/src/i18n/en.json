@@ -77,6 +77,9 @@
   "overview.registry_invalid": "config/aster.yaml has problems, so no modem can be listed. Fix it under Config.",
 
   "modem.provider": "Provider",
+  "modem.network": "Network",
+  "modem.network_none": "No service",
+  "modem.network_read": "read from the modem {when}",
   "modem.number": "Number",
   "modem.number_entered": "entered by hand",
   "modem.signal": "Signal",

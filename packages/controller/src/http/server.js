@@ -53,6 +53,7 @@ const VERSION = process.env.ASTER_VERSION || String(createRequire(import.meta.ur
  * @property {ReturnType<typeof createHealth>} health
  * @property {ReturnType<typeof createSse>} sse
  * @property {ReturnType<typeof import('../devices/state.js').createDeviceState> | null} devices
+ * @property {ReturnType<typeof import('../at/network.js').createNetworkReader> | null} network
  * @property {ReturnType<typeof import('../devices/scan.js').createScanOps> | null} scan
  * @property {ReturnType<typeof import('../sms/outbox.js').createOutbox> | null} outbox
  * @property {ReturnType<typeof import('../notify/queue.js').createNotifyQueue> | null} notify
@@ -109,15 +110,15 @@ const EMPTY_REGISTRY = { version: /** @type {const} */ (1), modems: [], phones: 
 
 /**
  * @param {Omit<Ctx, 'sessions' | 'health' | 'sse' | 'sessionOf' | 'registryFile' | 'log' | 'now' | 'timing' | 'paths'
- *   | 'outbox' | 'notify' | 'logRing'> & {
+ *   | 'outbox' | 'notify' | 'logRing' | 'network'> & {
  *   paths: Partial<Paths> & { registry: string, state: string, spool: string },
- *   outbox?: Ctx['outbox'], notify?: Ctx['notify'], logRing?: Ctx['logRing'],
+ *   outbox?: Ctx['outbox'], notify?: Ctx['notify'], logRing?: Ctx['logRing'], network?: Ctx['network'],
  *   log?: Logger, now?: () => number, uiDir?: string | null, host?: string, port?: number, startedAt?: number,
  *   version?: string, timing?: Record<string, number>, thresholds?: Partial<typeof import('./routes/health.js').THRESHOLDS>,
  * }} options
  */
 export function createServer(options) {
-  const { db, bus, runner, registry, secrets, devices = null, scan = null, outbox = null, notify = null, logRing = null, ami = null } = options;
+  const { db, bus, runner, registry, secrets, devices = null, network = null, scan = null, outbox = null, notify = null, logRing = null, ami = null } = options;
   const log = options.log ?? SILENT;
   const now = options.now ?? Date.now;
   const timing = Object.freeze({ ...options.timing });
@@ -146,7 +147,7 @@ export function createServer(options) {
     startedAt: options.startedAt ?? now(),
   });
   /** @type {Ctx} */
-  const ctx = { db, bus, runner, registry, sessions, secrets, health, sse, devices, scan, outbox, notify, logRing, ami, paths, log, now, timing,
+  const ctx = { db, bus, runner, registry, sessions, secrets, health, sse, devices, network, scan, outbox, notify, logRing, ami, paths, log, now, timing,
     sessionOf: (request) => ofRequest.get(request) ?? null,
     registryFile() {
       try {

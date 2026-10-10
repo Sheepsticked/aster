@@ -54,14 +54,17 @@ function harness(registry = REGISTRY) {
   /** @type {any} */
   const log = { debug() {}, info: (/** @type {string} */ msg, /** @type {unknown} */ f) => logged.push({ level: 'info', msg, f }), warn: (/** @type {string} */ msg, /** @type {unknown} */ f) => logged.push({ level: 'warn', msg, f }), error: (/** @type {string} */ msg, /** @type {unknown} */ f) => logged.push({ level: 'error', msg, f }), child: () => log };
   let reg = /** @type {import('../src/config/registry.js').Registry | null} */ (validate(registry));
+  /** what the network reader would hand over, per modem @type {Map<string, any>} */
+  const networks = new Map();
   const devices = createDeviceState({
     db, ami: /** @type {any} */ (ami), bus, log, registry: () => reg, sysfsRoot: root, now,
     timing: { refreshMs: 40, sysfsPollMs: 25, debounceMs: 5, staleMs: 100, flapWindowMs: 1_000, flapDisconnects: 3 },
     onUsbChange: (change) => usbChanges.push(change),
     onRemapNeeded: (modem, reason) => remaps.push({ modem, reason }),
+    network: (id) => networks.get(id) ?? null,
   });
   return {
-    dir, root, db, bus, events, ami, devices, remaps, usbChanges, logged, log,
+    dir, root, db, bus, events, ami, devices, remaps, usbChanges, logged, log, networks,
     /** @param {number} ms */
     tick: (ms) => { clock += ms; },
     /** @param {Record<string, unknown> | null} next */
@@ -93,7 +96,8 @@ describe('devices state', () => {
     assert.equal(entries.length, 5);
     const uac = parseDeviceEntry(/** @type {any} */ (entries.find((p) => p.get('Device') === 'gsm_uac')), 'quectel');
     assert.deepEqual(uac, { driver: 'quectel', device: 'gsm_uac', state: 'Stopped', imei: null, imsi: null, dataTty: null, audio: 'plughw:CARD=q_1_1_3', gsmReg: 'Unknown', rssi: 0,
-      provider: null, number: null, current: 'stop', desired: 'stop', imeiSetting: '000000000000002', dataSetting: null, manufacturer: null, model: null, firmware: null, calls: 0, radio: null });
+      provider: null, number: null, current: 'stop', desired: 'stop', imeiSetting: '000000000000002', dataSetting: null, manufacturer: null, model: null, firmware: null, calls: 0, radio: null,
+      cell: null });
     const dongle = parseDeviceEntry(/** @type {any} */ (entries.find((p) => p.get('Event') === 'DongleDeviceEntry')), 'dongle');
     assert.equal(dongle.driver, 'dongle');
     assert.equal(dongle.state, 'Stopped');
@@ -108,6 +112,7 @@ describe('devices state', () => {
     assert.equal(parseDeviceEntry(new Map([['CallsChannels', 'x']]), 'dongle').calls, 0);
     assert.equal(parseDeviceEntry(new Map([['RadioSetting', 'off']]), 'quectel').radio, 'off');
     assert.equal(parseDeviceEntry(new Map(), 'quectel').radio, null, 'a driver without the radio patches reports no RadioSetting');
+    assert.equal(parseDeviceEntry(new Map([['LocationAreaCode', '00A1'], ['CellID', '00B2C3D']]), 'quectel').cell, '00A1/00B2C3D');
   });
 
   test('uiState: every combination of registry entry, observation and USB presence gives one of the eleven states in precedence order', () => {
@@ -190,6 +195,15 @@ describe('devices state', () => {
     assert.equal(h.events[3].rssi, 9);
     assert.equal(h.devices.states().get('ec25')?.rssi, 9);
     assert.equal(h.devices.stateOf(/** @type {any} */ (validate(REGISTRY)).modems[1]), 'ready');
+    // a new network reading publishes that modem; the same network read again later does not
+    h.networks.set('ec25', { service: true, generation: '4G', tech: 'FDD LTE', band: 'LTE band 3', observed_at: 1 });
+    await h.devices.refresh();
+    assert.equal(h.events.length, 5);
+    assert.deepEqual([h.events[4].modem_id, h.events[4].network?.generation], ['ec25', '4G']);
+    h.networks.set('ec25', { service: true, generation: '4G', tech: 'FDD LTE', band: 'LTE band 3', observed_at: 2 });
+    await h.devices.refresh();
+    assert.equal(h.events.length, 5);
+    assert.equal(h.devices.states().get('ec25')?.network?.observed_at, 2);
   });
 
   test('AMI down: rows are left alone, the published state turns unverified once the observation is stale, and recovers', async () => {
