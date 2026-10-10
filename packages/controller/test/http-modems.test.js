@@ -220,21 +220,20 @@ describe('http modem routes', () => {
     }
   });
 
-  test('DELETE removes the modem; a phone that dials out through it is 409 first', async () => {
-    const h = await harness({ registry: { ...REGISTRY, phones: [{ number: '596', secret: 'sip-secret', outbound: 'gsm1' }], modems: [{ ...MODEM, ring: [] }] } });
+  test('DELETE removes the modem; a phone that dialed out through it stays, internal only', async () => {
+    const phones = [{ number: '596', secret: 'sip-secret', outbound: 'gsm1' }, { number: '597', secret: 'sip-secret', outbound: null }];
+    const h = await harness({ registry: { ...REGISTRY, phones, modems: [{ ...MODEM, ring: [] }] } });
     try {
       const { cookie } = await h.login();
-      const refused = await h.app.inject({ method: 'DELETE', url: '/api/modems/gsm1', headers: { cookie } });
-      assert.equal(refused.statusCode, 409);
-      assert.match(refused.json().error, /phone 596 dials out through modem gsm1/);
-      assert.equal(h.applies.length, 0);
-
-      await h.app.inject({ method: 'PUT', url: '/api/phones/596', headers: { cookie }, payload: { outbound: null } });
       const response = await h.app.inject({ method: 'DELETE', url: '/api/modems/gsm1', headers: { cookie } });
       assert.equal(response.statusCode, 200);
-      assert.deepEqual([response.json().ok, response.json().modem], [true, null]);
-      assert.deepEqual(/** @type {any} */ (h.applies[1]).registry.modems, [], 'the apply carries the registry without it, and reconcile sends the driver Remove');
+      assert.deepEqual([response.json().ok, response.json().modem, response.json().unlinked], [true, null, ['596']]);
+      const applied = /** @type {any} */ (h.applies[0]).registry;
+      assert.deepEqual(applied.modems, [], 'the apply carries the registry without it, and reconcile sends the driver Remove');
+      assert.deepEqual(applied.phones.map((/** @type {any} */ phone) => [phone.number, phone.outbound]), [['596', null], ['597', null]]);
+      assert.equal(h.applies.length, 1, 'the modem and its phones change in one apply');
       assert.equal(h.onDisk().registry.modems.length, 0);
+      assert.deepEqual(h.onDisk().registry.phones.map((phone) => phone.outbound), [null, null]);
     } finally {
       await h.stop();
     }

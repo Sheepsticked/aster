@@ -149,6 +149,9 @@
     }
   }
 
+  /** The phones that dial out through this modem: deleting it leaves them internal only. */
+  const dialingOut = $derived(phones.filter((phone) => phone.outbound === id).map((phone) => phone.number));
+
   async function loadDevices() {
     try {
       devices = (await api.scanLatest())?.scan?.unassigned ?? [];
@@ -278,10 +281,12 @@
 
   async function remove() {
     deleting = true;
+    const unlinked = dialingOut;
     try {
       const { applied } = await settleChange(await api.deleteModem(id));
       if (applied) {
-        toasts.push({ kind: 'success', text: t('modem.deleted', { id }) });
+        const text = unlinked.length > 0 ? t('modem.deleted_unlinked', { id, phones: unlinked.join(', ') }) : t('modem.deleted', { id });
+        toasts.push({ kind: 'success', text });
         confirming = false;
         navigate('/modems');
         return;
@@ -1014,7 +1019,7 @@
 <Confirm
   bind:open={confirming}
   title={t('modem.delete_title', { id })}
-  text={t('modem.delete_text')}
+  text={dialingOut.length > 0 ? `${t('modem.delete_text')} ${t('modem.delete_phones', { phones: dialingOut.join(', ') })}` : t('modem.delete_text')}
   confirmLabel={t('modem.delete')}
   danger
   busy={deleting}

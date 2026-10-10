@@ -146,6 +146,8 @@
   "modem.delete": "Delete the modem",
   "modem.delete_title": "Delete modem {id}?",
   "modem.delete_text": "The entry goes out of config/aster.yaml and the driver is told to drop the device. The messages and calls it has already handled stay.",
+  "modem.delete_phones": "Phones {phones} dial out through it: they stay, for internal calls only.",
+  "modem.deleted_unlinked": "Modem {id} was deleted; phones {phones} now make internal calls only",
   "modem.actions": "Actions",
   "modem.actions_hint": "Each one starts an operation; its result appears as a message.",
   "modem.action_start": "Start",

@@ -586,10 +586,10 @@ function modemRoute(method, id, verb, body) {
       return json({ ok: true, operation: applied(), modem: withForwarding(modem) });
     }
     if (method === 'DELETE') {
-      const dials = state.phones.filter((phone) => phone.outbound === id).map((phone) => phone.number);
-      if (dials.length > 0) return error(`phone ${dials.join(', ')} dials out through modem ${id}; change or delete ${dials.length === 1 ? 'it' : 'them'} first`, 409);
+      const unlinked = state.phones.filter((phone) => phone.outbound === id).map((phone) => phone.number);
+      state.phones = state.phones.map((phone) => (phone.outbound === id ? { ...phone, outbound: null } : phone));
       state.modems = state.modems.filter((entry) => entry.id !== id);
-      return json({ ok: true, operation: applied(), modem: null });
+      return json({ ok: true, operation: applied(), modem: null, unlinked });
     }
   }
 

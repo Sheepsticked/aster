@@ -152,15 +152,17 @@ export function modemRoutes(app, ctx) {
     const id = /** @type {any} */ (request.params).id;
     const found = find(id, reply);
     if (!found) return reply;
-    const rings = found.registry.phones.filter((phone) => phone.outbound === id).map((phone) => phone.number);
-    if (rings.length > 0) {
-      return reply.code(409).send({ error: `phone ${rings.join(', ')} dials out through modem ${id}; change or delete ${rings.length === 1 ? 'it' : 'them'} first` });
-    }
-    const next = { ...found.registry, modems: found.registry.modems.filter((modem) => modem.id !== id) };
+    // Phones that dialed out through it stay, as internal-only phones, in the same apply.
+    const unlinked = found.registry.phones.filter((phone) => phone.outbound === id).map((phone) => phone.number);
+    const next = {
+      ...found.registry,
+      modems: found.registry.modems.filter((modem) => modem.id !== id),
+      phones: found.registry.phones.map((phone) => (phone.outbound === id ? { ...phone, outbound: null } : phone)),
+    };
     const applied = await applyRegistry(ctx, { registry: next, baseHash: found.hash, force: /** @type {any} */ (request.body)?.force === true });
     if (!applied.ok) return reply.code(applied.code).send({ ok: false, error: applied.error, problems: applied.problems, operation: applied.operation, result: applied.result });
-    ctx.log.info('modem deleted', { modem: id, operation: applied.operation.id });
-    return reply.send({ ok: true, operation: applied.operation, modem: null });
+    ctx.log.info('modem deleted', { modem: id, unlinked, operation: applied.operation.id });
+    return reply.send({ ok: true, operation: applied.operation, modem: null, unlinked });
   });
 
   // The device actions: enqueued and answered at once, because a graceful stop waits for calls to end (up to the drivers' own time).

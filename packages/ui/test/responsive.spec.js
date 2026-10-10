@@ -876,6 +876,27 @@ test.describe('the phones page', () => {
     await page.getByRole('dialog').getByRole('button', { name: ru['common.delete'] }).click();
     await expect(page.getByText('rings phone 101', { exact: false })).toBeVisible({ timeout: 15_000 });
   });
+
+  test('deleting a modem keeps the phones that dialed out through it, internal only', async ({ page }, info) => {
+    // 101 dials out through gsm1: the dialog names it, and after the delete it makes internal calls only.
+    const internal = page.getByText(ru['phones.internal_only'], { exact: true }).filter({ visible: true });
+    await expect(internal).toHaveCount(1);
+    await page.goto('/modems/gsm1');
+    await page.getByRole('button', { name: ru['modem.delete'], exact: true }).filter({ visible: true }).first().click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(ru['modem.delete_phones'].replace('{phones}', '101'));
+    await dialog.getByRole('button', { name: ru['modem.delete'], exact: true }).click();
+    await expect(page.getByText(ru['modem.deleted_unlinked'].replace('{id}', 'gsm1').replace('{phones}', '101'))).toBeVisible();
+    // Within the app: a page load would start the mock over.
+    if (info.project.use.isMobile) {
+      await page.getByRole('button', { name: ru['nav.open_menu'] }).tap();
+      await page.getByRole('dialog').getByRole('link', { name: ru['nav.phones'] }).tap();
+    } else {
+      await page.getByRole('link', { name: ru['nav.phones'] }).click();
+    }
+    await expect(page).toHaveURL(/\/phones$/);
+    await expect(internal).toHaveCount(2);
+  });
 });
 
 test.describe('the settings page', () => {
