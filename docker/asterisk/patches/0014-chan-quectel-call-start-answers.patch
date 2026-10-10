@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Subject: [PATCH] call start: ask AT+CLCC again; ATA and ATD wait 20 s
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: one AT command answered late or not at all restarted the modem and
+         ended every call on it, so a lost or slow answer at the start of a
+         call (the modem busy with the network, or a USB transfer error)
+         cost the call (applies on top of 0013)
+
+An AT+CLCC that gets no answer within its 5 s is written once more and
+waited for another 15 s. When both writes are answered, the first answer
+only starts a 1 s wait for the second, so that a late answer is not taken
+for the next command's. ATA and ATD wait 20 s instead of 5 s.
+---
+ at_command.c   |  3 ++-
+ at_queue.c     | 53 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ at_queue.h     |  7 +++++++
+ at_response.c  |  6 ++++++
+ chan_quectel.c | 19 +++++++++++++++++-
+ 5 files changed, 86 insertions(+), 2 deletions(-)
+
+diff --git a/at_command.c b/at_command.c
+index b76701f..7bd648d 100644
+--- a/at_command.c
++++ b/at_command.c
+@@ -581,6 +581,7 @@ EXPORT_DEF int at_enqueue_dial(struct cpvt *cpvt, const char *number, int clir)
+ 	}
+ 
+ 	ATQ_CMD_INIT_DYNI(cmds[cmdsno], CMD_AT_D);
++	cmds[cmdsno].timeout.tv_sec = ATQ_CMD_TIMEOUT_CALL;
+ 	cmdsno++;
+ 
+ /* on failed ATD this up held call */
+@@ -609,7 +610,7 @@ EXPORT_DEF int at_enqueue_answer(struct cpvt *cpvt)
+ {
+ 	pvt_t* pvt = cpvt->pvt;
+ 	at_queue_cmd_t cmds[] = {
+-		ATQ_CMD_DECLARE_DYN(CMD_AT_A),
++		ATQ_CMD_DECLARE_DYNFT(CMD_AT_A, RES_OK, ATQ_CMD_FLAG_DEFAULT, ATQ_CMD_TIMEOUT_CALL, 0),
+ //		ATQ_CMD_DECLARE_ST(CMD_AT_DDSETEX, cmd_ddsetex2),
+ 		};\
+ 	int count = ITEMS_OF(cmds);
+diff --git a/at_queue.c b/at_queue.c
+index 01e4e20..53b00d0 100644
+--- a/at_queue.c
++++ b/at_queue.c
+@@ -112,6 +112,7 @@ static at_queue_task_t * at_queue_add (struct cpvt * cpvt, const at_queue_cmd_t
+ 			e->cmdsno = cmdsno;
+ 			e->cindex = 0;
+ 			e->cpvt = cpvt;
++			e->owed = 0;
+ 			e->actionid[0] = '\0';
+ 
+ 			memcpy(&e->cmds[0], cmds, cmdsno * sizeof(*cmds));
+@@ -221,6 +222,7 @@ EXPORT_DEF void at_queue_remove_cmd (struct pvt* pvt, at_res_t res)
+ 		unsigned index = task->cindex;
+ 
+ 		task->cindex++;
++		task->owed = 0;
+ 		PVT_STATE(pvt, at_cmds)--;
+ 		ast_debug (4, "[%s] remove command '%s' expected response '%s' real '%s' cmd %u/%u flags 0x%02x from queue\n",
+ 				PVT_ID(pvt), at_cmd2str (task->cmds[index].cmd),
+@@ -284,6 +286,57 @@ EXPORT_DEF int at_queue_run (struct pvt * pvt)
+ 	return fail;
+ }
+ 
++/*!
++ * \brief Write the head command again when it is an AT+CLCC that got no answer in time: the answer may have been lost
++ *        on the USB, and the call state it asks for can be asked again at any time
++ * \param pvt -- pvt structure
++ * \return 1 when it was written again, 0 when the timeout stands
++ */
++#/* */
++EXPORT_DEF int at_queue_ask_again (struct pvt * pvt)
++{
++	at_queue_task_t * task = AST_LIST_FIRST (&pvt->at_queue);
++	at_queue_cmd_t * cmd = at_queue_head_cmd_nc(pvt);
++
++	if(!cmd || cmd->cmd != CMD_AT_CLCC || task->owed || cmd->length > 0 || !cmd->data || (cmd->flags & ATQ_CMD_FLAG_STATIC) == 0)
++		return 0;
++	if(at_write(pvt, cmd->data, strlen(cmd->data)))
++		return 0;
++	task->owed = 2;
++	cmd->timeout = ast_tvadd (ast_tvnow(), ast_tv(ATQ_CMD_TIMEOUT_AGAIN, 0));
++	return 1;
++}
++
++/*!
++ * \brief Take one final result of a command asked again; the first of its two results only starts a short wait for the
++ *        second, so that a late answer to the first write is not taken for the next command's
++ * \param pvt -- pvt structure
++ * \return 1 when the result was taken here, 0 when it completes the command as usual
++ */
++#/* */
++EXPORT_DEF int at_queue_take_owed (struct pvt * pvt)
++{
++	at_queue_task_t * task = AST_LIST_FIRST (&pvt->at_queue);
++	at_queue_cmd_t * cmd = at_queue_head_cmd_nc(pvt);
++
++	if(!cmd || task->owed < 2)
++		return 0;
++	task->owed = 1;
++	cmd->timeout = ast_tvadd (ast_tvnow(), ast_tv(ATQ_CMD_TIMEOUT_GRACE, 0));
++	return 1;
++}
++
++/*!
++ * \brief Whether the head command was asked again and got one of its two results: its timeout ends the wait for the other
++ * \param pvt -- pvt structure
++ */
++#/* */
++EXPORT_DEF int at_queue_head_answered (const struct pvt * pvt)
++{
++	const at_queue_task_t * task = at_queue_head_task(pvt);
++	return task && task->owed == 1;
++}
++
+ /*!
+  * \brief Write commands with queue
+  * \param pvt -- pvt structure
+diff --git a/at_queue.h b/at_queue.h
+index be7f7a0..55846b0 100644
+--- a/at_queue.h
++++ b/at_queue.h
+@@ -30,6 +30,9 @@ typedef struct at_queue_cmd
+ #define ATQ_CMD_TIMEOUT_MEDIUM	5		/*!< timeout value  5 sec */
+ #define ATQ_CMD_TIMEOUT_LONG	40		/*!< timeout value 40 sec */
+ #define ATQ_CMD_TIMEOUT_RADIO	30		/*!< timeout value 30 sec: AT+CFUN=<n> switching the radio (Aster radio patch) */
++#define ATQ_CMD_TIMEOUT_CALL	20		/*!< timeout value 20 sec: answering and dialing, which wait for the network */
++#define ATQ_CMD_TIMEOUT_AGAIN	15		/*!< timeout value 15 sec: an AT+CLCC asked again after its first timeout */
++#define ATQ_CMD_TIMEOUT_GRACE	1		/*!< seconds an AT+CLCC asked again waits for its second answer */
+ 
+ 	char*			data;			/*!< command and data to send in device */
+ 	unsigned		length;			/*!< data length */
+@@ -82,6 +85,7 @@ typedef struct at_queue_task
+ 	struct cpvt*	cpvt;
+ 
+ 	int uid;
++	unsigned	owed;			/*!< final results the head command still expects: 2 after it was asked again */
+ 	char		actionid[64];		/*!< AMI ActionID of a QuectelAtCommand task; empty for every other task */
+ 
+ 	at_queue_cmd_t	cmds[0];	/* this field must be last */
+@@ -99,6 +103,9 @@ EXPORT_DECL const at_queue_task_t * at_queue_head_task (const struct pvt * pvt);
+ EXPORT_DECL const at_queue_cmd_t * at_queue_head_cmd(const struct pvt * pvt);
+ EXPORT_DECL int at_queue_timeout(const struct pvt * pvt);
+ EXPORT_DECL int at_queue_run (struct pvt * pvt);
++EXPORT_DECL int at_queue_ask_again (struct pvt * pvt);
++EXPORT_DECL int at_queue_take_owed (struct pvt * pvt);
++EXPORT_DECL int at_queue_head_answered (const struct pvt * pvt);
+ 
+ INLINE_DECL at_cmd_suppress_error_t at_cmd_suppress_error_mode(int flags)
+ {
+diff --git a/at_response.c b/at_response.c
+index 68740ed..f4856fe 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -212,6 +212,9 @@ static int at_response_ok (struct pvt* pvt, at_res_t res)
+ 
+ 	if(ecmd->res == RES_OK || ecmd->res == RES_CMGR)
+ 	{
++		/* the first of the two answers an AT+CLCC asked again gets */
++		if(at_queue_take_owed (pvt))
++			return 0;
+ 		switch (ecmd->cmd)
+ 		{
+ 			case CMD_AT:
+@@ -483,6 +486,9 @@ static int at_response_error (struct pvt* pvt, at_res_t res, const char* str)
+ 
+ 	if (ecmd && (ecmd->res == RES_OK || ecmd->res == RES_CMGR || ecmd->res == RES_SMS_PROMPT))
+ 	{
++		/* one of two answers to an AT+CLCC asked again: the other one decides */
++		if(at_queue_take_owed (pvt))
++			return 0;
+ 		switch (ecmd->cmd)
+ 		{
+ 			/* critical errors */
+diff --git a/chan_quectel.c b/chan_quectel.c
+index d30ef8c..13ab47b 100644
+--- a/chan_quectel.c
++++ b/chan_quectel.c
+@@ -703,8 +703,9 @@ static void* do_monitor_phone (void* data)
+ 		}
+ 
+ 		t = at_queue_timeout(pvt);
++		/* a passed deadline waits the idle time, except the short wait for a second answer, which other data must not extend */
+ 		if(t < 0)
+-			t = pvt->timeout;
++			t = at_queue_head_answered (pvt) ? 0 : pvt->timeout;
+ 
+ 		ast_mutex_unlock (&pvt->lock);
+ 
+@@ -718,6 +719,22 @@ static void* do_monitor_phone (void* data)
+ 				ast_mutex_unlock (&pvt->lock);
+ 				continue;
+ 			}
++			/* an AT+CLCC asked again got one answer and the second did not follow: done */
++			if(ecmd && at_queue_head_answered (pvt))
++			{
++				at_queue_handle_result (pvt, RES_OK);
++				if(at_queue_run (pvt))
++					goto e_cleanup;
++				ast_mutex_unlock (&pvt->lock);
++				continue;
++			}
++			/* a status query that got no answer is asked again before the modem is given up */
++			if(ecmd && at_queue_ask_again (pvt))
++			{
++				ast_log (LOG_WARNING, "[%s] no answer to '%s' in time, asking again\n", dev, at_cmd2str (ecmd->cmd));
++				ast_mutex_unlock (&pvt->lock);
++				continue;
++			}
+ 			if(ecmd)
+ 			{
+ 				ast_log (LOG_ERROR, "[%s] timedout while waiting '%s' in response to '%s'\n", dev, at_res2str (ecmd->res), at_cmd2str (ecmd->cmd));
