@@ -51,6 +51,7 @@ INTERACTIVE=1
 INSTALL_DOCKER=0
 SKIP_UP=0
 REBUILD=0
+CONTROLLER_REBUILT=0        # --rebuild built the controller image for steps 4/4b already
 SD_TUNING=auto
 CHANGED=0
 MIN_FREE_KB=$((2 * 1024 * 1024))
@@ -552,7 +553,9 @@ make_secrets() {
       [ "$password" = "$again" ] || die "the two passwords are not the same"
     fi
     [ -n "$password" ] || die "the admin password must not be empty"
-    # Hashed into a variable and checked: a failure inside a nested command substitution would go unnoticed.
+    # Hashed into a variable and checked: a failure inside a nested command substitution would go unnoticed. An image
+    # the tools need is made out here, as what a substitution sets is lost when it ends.
+    local_node_usable || ensure_controller_image
     local hash
     hash=$(hash_password "$password") || die "could not compute the password hash; nothing was written"
     case $hash in
@@ -910,7 +913,14 @@ local_node_usable() {
 }
 
 # Only the controller image, and only when missing: steps 4 and 4b need a Node; the Asterisk image is not needed.
+# --rebuild builds it first, so the tools are the checkout's and not those of an image built from an older one.
 ensure_controller_image() {
+  if [ "$REBUILD" -eq 1 ] && [ "$IMAGE_SOURCE" = build ] && [ "$CONTROLLER_REBUILT" -eq 0 ]; then
+    compose build controller || die "building the controller image failed; compose says why above"
+    CONTROLLER_REBUILT=1
+    did "built the controller image again (--rebuild)"
+    return 0
+  fi
   image_exists "$ASTER_IMAGE_NS/aster-controller:$ASTER_VERSION" && return 0
   if [ "$IMAGE_SOURCE" = pull ]; then
     compose pull controller
@@ -939,7 +949,10 @@ ensure_images() {
     [ "$(image_id "$ns/aster-controller:$version")" = "$before_controller" ] || did "pulled $ns/aster-controller:$version"
     return
   fi
-  if [ "$REBUILD" -eq 1 ] || ! image_exists "$ns/aster-asterisk:$version" || ! image_exists "$ns/aster-controller:$version"; then
+  if [ "$CONTROLLER_REBUILT" -eq 1 ]; then
+    compose build asterisk
+    did "built the Asterisk image again (the controller image was built earlier in this run)"
+  elif [ "$REBUILD" -eq 1 ] || ! image_exists "$ns/aster-asterisk:$version" || ! image_exists "$ns/aster-controller:$version"; then
     compose build
     did "built the images"
   else

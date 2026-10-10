@@ -615,6 +615,44 @@ check "a dwc_otg that is built in but bound to nothing is left alone" \
   "$(cat "$PI5/boot/firmware/cmdline.txt")/$(printf '%s' "$pi5_out" | grep -c 'not needed: no dwc_otg USB controller here')" "$BOOT_LINE/1"
 check "and no warning is raised for it" "$(said "$pi5_out" 'Why: a Raspberry Pi 3 or older')/$(said "$pi5_out" 'REBOOT THIS HOST')" '0/0'
 
+# ---- --rebuild: steps 4 and 4b use the controller image this run builds, not one built from an older checkout --------
+# A fake docker logs every call and has every image already; a fake node sends the tools into the image, a fake curl
+# answers for the API.
+printf '\n== --rebuild runs the controller tools from the image it builds\n'
+RB="$WORK/rebuild"
+mkdir -p "$RB/bin" "$RB/home/config" "$RB/system"
+cat > "$RB/bin/docker" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$RB/docker.log"
+case "\$*" in
+  'version --format'*) echo 29.0.0 ;;
+  'compose version'*) echo 2.40.0 ;;
+  *generate.js*) echo 'generate.js: 0 of 5 file(s) written into /srv/aster/config/asterisk/aster.d' ;;
+  'container inspect'*) exit 1 ;;
+esac
+exit 0
+EOF
+printf '#!/bin/sh\nexit 1\n' > "$RB/bin/node"
+printf '#!/bin/sh\necho %s\n' "'{\"status\":\"ok\"}'" > "$RB/bin/curl"
+chmod +x "$RB/bin/docker" "$RB/bin/node" "$RB/bin/curl"
+( umask 077; printf 'ASTER_AMI_SECRET=a\nASTER_SESSION_KEY=b\nASTER_ADMIN_PASSWORD_HASH=$scrypt$c\n' > "$RB/home/config/secrets.env" )
+rebuild_run() {
+  : > "$RB/docker.log"
+  PATH="$RB/bin:$PATH" ASTER_SYSTEM_ROOT="$RB/system" ASTER_ENV_FILE="$RB/.env" \
+    "$INSTALL" --home "$RB/home" --http-port 18096 --non-interactive --build "$@" 2>&1
+}
+line_of() { grep -n -m1 -e "$1" "$RB/docker.log" | cut -d: -f1; }
+rebuild_out=$(rebuild_run --rebuild); rebuild_status=$?
+check_true "a --rebuild run over images that are already there succeeds" "$rebuild_status"
+[ "$rebuild_status" -eq 0 ] || printf '%s\n' "$rebuild_out" >&2
+built=$(line_of ' build controller$'); generated=$(line_of 'generate.js')
+check "it builds the controller image before the generator runs in it" \
+  "$([ -n "$built" ] && [ -n "$generated" ] && [ "$built" -lt "$generated" ] && echo yes)" 'yes'
+check "once, and step 8 then builds the Asterisk image alone" \
+  "$(grep -c ' build controller$' "$RB/docker.log")/$(grep -c ' build asterisk$' "$RB/docker.log")/$(grep -c ' build$' "$RB/docker.log")" '1/1/0'
+rebuild_run > /dev/null
+check "a run without --rebuild builds nothing" "$(grep -c ' build' "$RB/docker.log")" '0'
+
 # ---- the Ansible role is a wrapper, so it must not drift away from what it wraps ----------------------------
 # Every option and variable the role passes must exist in install.sh, and the line it parses must be the one printed.
 printf '\n== the Ansible role and the installer still fit together\n'
