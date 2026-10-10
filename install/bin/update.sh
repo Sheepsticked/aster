@@ -23,6 +23,9 @@ set -euo pipefail
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
 SELF=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(CDPATH='' cd -- "$SELF/../.." && pwd)
+MSG_NAME=update.sh
+# shellcheck source=install/lib/messages.sh
+. "$SELF/../lib/messages.sh"
 HOME_DIR="$REPO/data"
 MODE=''
 ASSUME_YES=0
@@ -37,7 +40,7 @@ while [ $# -gt 0 ]; do
     --yes|-y) ASSUME_YES=1; shift ;;
     --force) FORCE=1; shift ;;
     -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) printf 'update.sh: unknown option: %s\n' "$1" >&2; exit 2 ;;
+    *) DIE_STATUS=2 die "unknown option: $1 (--help lists them)" ;;
   esac
 done
 
@@ -45,7 +48,7 @@ ENV_FILE=${ASTER_ENV_FILE:-$REPO/.env}
 # Fallback: .env in the home (older installs).
 [ -f "$ENV_FILE" ] || [ ! -f "$HOME_DIR/.env" ] || ENV_FILE="$HOME_DIR/.env"
 COMPOSE_FILE="$REPO/docker-compose.yml"
-[ -f "$ENV_FILE" ] || { printf 'update.sh: no %s — is this an Aster host? (--home names another home)\n' "$ENV_FILE" >&2; exit 1; }
+[ -f "$ENV_FILE" ] || die "no $ENV_FILE — is this an Aster host? (--home names another home)"
 
 compose() { ASTER_REPO=$REPO ASTER_HOME=$HOME_DIR docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"; }
 value() { sed -n "s/^$1=//p" "$ENV_FILE" | tail -1; }
@@ -65,10 +68,7 @@ if [ "$FORCE" -eq 1 ]; then
   printf '\n== backup skipped (--force)\n'
 else
   printf '\n== backup first\n'
-  "$SELF/backup.sh" --home "$HOME_DIR" || {
-    printf 'update.sh: nothing was updated; aster update --force updates without a backup\n' >&2
-    exit 1
-  }
+  "$SELF/backup.sh" --home "$HOME_DIR" || die "nothing was updated; aster update --force updates without a backup"
 fi
 
 printf '\n== images (%s)\n' "$MODE"
@@ -79,7 +79,7 @@ else
   if [ -d "$REPO/.git" ] && command -v git >/dev/null 2>&1; then
     printf '   git pull in %s\n' "$REPO"
     # git has already said why it failed (no fast-forward, no network, dubious ownership).
-    git -C "$REPO" pull --ff-only || printf 'update.sh: git pull failed (git says why above); the images are built from the checkout as it is\n' >&2
+    git -C "$REPO" pull --ff-only || warn "git pull failed (git says why above); the images are built from the checkout as it is"
   fi
   compose build
 fi
@@ -96,7 +96,7 @@ if generated=$(docker run --rm -e ASTER_HOME=/srv/aster -v "$HOME_DIR/config:/sr
   written=$(printf '%s' "$generated" | sed -n 's/^generate\.js: \([0-9]\{1,\}\) of [0-9]\{1,\} file(s) written.*$/\1/p' | tail -1)
 else
   printf '%s\n' "$generated" | sed 's/^/   /' >&2
-  printf 'update.sh: aster.d was not regenerated (the generator says why above); the files on disk are kept\n' >&2
+  warn "aster.d was not regenerated (the generator says why above); the files on disk are kept"
 fi
 asterisk_before=$(docker inspect -f '{{.Id}}' aster-asterisk 2>/dev/null || true)
 
@@ -129,8 +129,11 @@ while [ "$waited" -lt 120 ]; do
   sleep 2
   waited=$((waited + 2))
 done
-[ "$waited" -lt 120 ] || printf '   the controller still does not answer after %ss; doctor says what is wrong\n' "$waited"
+[ "$waited" -lt 120 ] || warn "the controller still does not answer after ${waited}s; doctor says what is wrong"
 
 printf '\n== doctor\n'
-# No write-rate sample here: `aster doctor` measures it when asked.
-"$SELF/doctor.sh" --home "$HOME_DIR" --write-seconds 0
+# No write-rate sample here: `aster doctor` measures it when asked. Its status is the update's.
+status=0
+"$SELF/doctor.sh" --home "$HOME_DIR" --write-seconds 0 || status=$?
+warnings_summary
+exit "$status"

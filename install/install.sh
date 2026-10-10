@@ -69,41 +69,10 @@ step() { printf '\n== %s\n' "$*"; }
 ok() { printf '   %s\n' "$*"; }
 did() { CHANGED=$((CHANGED + 1)); printf '   changed: %s\n' "$*"; }
 
-# Warnings and errors are framed blocks (in colour on a terminal), and every warning is listed again at the end.
-WARNINGS=()
-if [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
-  C_WARN=$'\033[1;33m' C_ERR=$'\033[1;31m' C_OFF=$'\033[0m'
-else
-  C_WARN='' C_ERR='' C_OFF=''
-fi
-RULE='================================================================================================'
-# block COLOUR TITLE TEXT: the text between a titled rule and a closing one, every line marked, so it stands out of
-# the log. Lines are not wrapped (the terminal does that), so a grep of the output still finds every sentence whole.
-block() {
-  local colour=$1 title=$2 line
-  shift 2
-  {
-    printf '\n%s== %s %s%s\n' "$colour" "$title" "${RULE:$((${#title} + 4))}" "$C_OFF"
-    while IFS= read -r line; do printf '%s||%s %s\n' "$colour" "$C_OFF" "$line"; done <<< "$*"
-    printf '%s%s%s\n' "$colour" "$RULE" "$C_OFF"
-  } >&2
-}
-# A warning's first line says what to do; more lines may follow with the why.
-warn() { WARNINGS+=("$*"); block "$C_WARN" WARNING "$*"; }
-# The first line of every warning of the run, numbered, so none is lost in the scroll.
-warnings_summary() {
-  [ "${#WARNINGS[@]}" -gt 0 ] || return 0
-  local i
-  {
-    printf '\n%s%s%s\n' "$C_WARN" "$RULE" "$C_OFF"
-    printf '%s  %d WARNING(S) IN THIS RUN — read them before you rely on this host:%s\n' "$C_WARN" "${#WARNINGS[@]}" "$C_OFF"
-    for i in "${!WARNINGS[@]}"; do
-      printf '%s  %2d.%s %s\n' "$C_WARN" "$((i + 1))" "$C_OFF" "${WARNINGS[$i]%%$'\n'*}"
-    done
-    printf '%s%s%s\n' "$C_WARN" "$RULE" "$C_OFF"
-  } >&2
-}
-die() { warnings_summary; block "$C_ERR" "ERROR — install.sh stopped" "$*"; exit 1; }
+# Warnings and errors are framed blocks, and every warning is listed again at the end.
+MSG_NAME=install.sh
+# shellcheck source=install/lib/messages.sh
+. "$SELF/lib/messages.sh"
 have() { command -v "$1" >/dev/null 2>&1; }
 is_root() { [ "$(id -u)" -eq 0 ]; }
 # Whether version $1 is $2 or newer, by its leading dotted number ("2.40.3+ds1" is 2.40.3).

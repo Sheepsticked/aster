@@ -443,6 +443,23 @@ for script_help in "$REPO/install/install.sh -h" "$REPO/install/bin/aster help" 
   fi
 done
 
+# Every host script stops with the same framed error block, naming itself, and keeps its own exit status.
+printf '\n== an error is a framed block that names the script\n'
+while IFS='|' read -r script arg want name text; do
+  out=$(ASTER_ENV_FILE="$WORK/no.env" bash "$REPO/$script" "$arg" 2>&1); status=$?
+  title=$(printf '%s\n' "$out" | grep -c "^== ERROR — $name stopped ==")
+  marked=$(printf '%s\n' "$out" | grep -cF "|| $text")
+  check "$script $arg: exit $want, in a framed block" "$status/$title/$marked" "$want/1/1"
+done <<'EOF'
+install/install.sh|--bogus|1|install.sh|unknown option: --bogus
+install/bin/aster|bogus|2|aster|unknown command: bogus
+install/bin/backup.sh|--bogus|2|backup.sh|unknown option: --bogus
+install/bin/doctor.sh|--bogus|2|doctor.sh|unknown option: --bogus
+install/bin/migrate.sh|--bogus|2|migrate.sh|unknown argument: --bogus
+install/bin/update.sh|--bogus|2|update.sh|unknown option: --bogus
+tools/fleet-update.sh|--bogus|2|fleet-update|unknown option: --bogus
+EOF
+
 # The host's Node runs the controller's tools only when the checkout's dependencies are installed (a bare clone cannot
 # import `yaml`); tested against a complete checkout and a bare one.
 if command -v node >/dev/null 2>&1; then

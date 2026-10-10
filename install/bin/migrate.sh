@@ -39,7 +39,9 @@ SYSTEM_ROOT=${ASTER_SYSTEM_ROOT:-/}
 HEALTH_TIMEOUT=${ASTER_HEALTH_TIMEOUT:-120}
 
 usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
-die() { printf 'migrate.sh: %s\n' "$*" >&2; exit 1; }
+MSG_NAME=migrate.sh
+# shellcheck source=install/lib/messages.sh
+. "$SELF/../lib/messages.sh"
 
 while [ $# -gt 0 ]; do
   case $1 in
@@ -56,7 +58,7 @@ while [ $# -gt 0 ]; do
       COMMAND=$1
       shift
       ;;
-    *) printf 'migrate.sh: unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) usage >&2; DIE_STATUS=2 die "unknown argument: $1 (the commands are listed above)" ;;
   esac
 done
 [ -n "$COMMAND" ] || { usage >&2; exit 2; }
@@ -97,7 +99,6 @@ note() { printf '   note      %s\n' "$*"; }
 leftover() { printf '   leftover  %s\n' "$*"; }
 conflict() { CONFLICTS=$((CONFLICTS + 1)); printf '   CONFLICT  %s\n' "$*"; }
 did() { printf '   done      %s\n' "$*"; }
-warn() { printf '   warning   %s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 host() { printf '%s' "${SYSTEM_ROOT%/}$1"; }
 
@@ -965,3 +966,4 @@ case $COMMAND in
   cleanup) cmd_cleanup ;;
   replace) cmd_replace ;;
 esac
+warnings_summary

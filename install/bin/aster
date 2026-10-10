@@ -42,7 +42,9 @@ ENV_FILE=${ASTER_ENV_FILE:-$REPO/.env}
 COMPOSE_FILE="$REPO/docker-compose.yml"
 
 usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
-die() { printf 'aster: %s\n' "$*" >&2; exit 1; }
+MSG_NAME=aster
+# shellcheck source=install/lib/messages.sh
+. "$SELF/../lib/messages.sh"
 # Say which is missing and where: the home ASTER_HOME names (checked first), or the .env install.sh writes.
 need_home() {
   [ "$HOME_GIVEN" -eq 0 ] || [ -d "$HOME_DIR" ] || die "no $HOME_DIR — ASTER_HOME names another home"
@@ -128,8 +130,7 @@ case ${1:-help} in
     usage
     ;;
   *)
-    printf 'aster: unknown command: %s\n\n' "$1" >&2
     usage >&2
-    exit 2
+    DIE_STATUS=2 die "unknown command: $1 (the list is above)"
     ;;
 esac

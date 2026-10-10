@@ -19,6 +19,10 @@ set -euo pipefail
 # The checkout is the one this file is in; the home is data/ inside it unless --home names another one.
 SELF=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(CDPATH='' cd -- "$SELF/../.." && pwd)
+# Only for its own errors: a problem the checks find is a PROBLEM line and goes to the summary at the end.
+MSG_NAME=doctor.sh
+# shellcheck source=install/lib/messages.sh
+. "$SELF/../lib/messages.sh"
 HOME_DIR="$REPO/data"
 WRITE_SECONDS=0
 PROBLEMS=0
@@ -31,11 +35,11 @@ while [ $# -gt 0 ]; do
     --home=*) HOME_DIR=${1#*=}; shift ;;
     --write-seconds) WRITE_SECONDS=${2:?--write-seconds needs a number}; shift 2 ;;
     -h|--help) sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) printf 'doctor.sh: unknown option: %s\n' "$1" >&2; exit 2 ;;
+    *) DIE_STATUS=2 die "unknown option: $1 (--help lists them)" ;;
   esac
 done
 
-case $WRITE_SECONDS in ''|*[!0-9]*) printf 'doctor.sh: --write-seconds needs a number of seconds\n' >&2; exit 2 ;; esac
+case $WRITE_SECONDS in ''|*[!0-9]*) DIE_STATUS=2 die "--write-seconds needs a number of seconds" ;; esac
 
 # Problems and notes are marked in colour on a terminal and listed again in the summary at the end.
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then

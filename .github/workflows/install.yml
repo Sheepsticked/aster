@@ -33,7 +33,7 @@ jobs:
       - name: shellcheck every script the installer ships
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning install/install.sh install/bin/* install/udev/alsa-name \
+          shellcheck --severity=warning install/install.sh install/bin/* install/lib/*.sh install/udev/alsa-name \
             test/install/*.sh tools/write-budget.sh tools/hw-probe.sh tools/fleet-update.sh
 
       - name: the ALSA card id udev computes

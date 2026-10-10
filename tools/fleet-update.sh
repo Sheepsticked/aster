@@ -39,9 +39,14 @@
 # not stop it; `aster doctor` there says how it ended. Exit 0: every host is ok.
 set -o pipefail
 
-command -v ssh >/dev/null 2>&1 || { printf 'fleet-update: ssh is not installed\n' >&2; exit 1; }
+HERE=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# Errors are framed blocks; one that stops the run before any host is touched exits 2.
+MSG_NAME=fleet-update
+DIE_STATUS=2
+# shellcheck source=install/lib/messages.sh
+. "$HERE/../install/lib/messages.sh"
 
-die() { printf 'fleet-update: %s\n' "$*" >&2; exit 2; }
+command -v ssh >/dev/null 2>&1 || DIE_STATUS=1 die "ssh is not installed"
 # The comment block at the top of this file, up to the first line of code.
 usage() { sed -n '2,/^[^#]/{/^#/p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
@@ -326,13 +331,11 @@ fi
 
 if [ "${#refused[@]}" -gt 0 ] && [ "$keep_going" -eq 0 ]; then
   summary check
-  printf '\nfleet-update: nothing was updated; %d host(s) failed the check.\n' "${#refused[@]}" >&2
-  printf 'Fix them, or use --keep-going to update the others. Logs: %s\n' "$logs" >&2
-  exit 1
+  DIE_STATUS=1 die "nothing was updated; ${#refused[@]} host(s) failed the check: fix them, or use --keep-going to update the others
+logs: $logs"
 fi
 if [ "${#ready[@]}" -eq 0 ]; then
-  printf '\nfleet-update: no host passed the check; nothing was updated\n' >&2
-  exit 1
+  DIE_STATUS=1 die "no host passed the check; nothing was updated"
 fi
 
 if [ "$assume_yes" -eq 0 ]; then
