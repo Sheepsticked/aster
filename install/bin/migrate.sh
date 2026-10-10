@@ -649,7 +649,7 @@ cmd_check() {
   elif [ -n "$running" ]; then
     say "   read $MIG/import-report.txt and the draft, then: aster migrate cutover"
   elif [ "$phase" = cutover ]; then
-    say "   Overview → Scan, then Assign each modem; check every call and SMS path; when it all works: aster migrate cleanup"
+    say "   each modem finds its USB port by itself (if one does not: its Modem page → Find the port again); check every call and SMS path; when it all works: aster migrate cleanup"
   elif [ -n "$existing" ] || [ "$any_image" -eq 1 ] || [ "$uid" = "$OLD_UID" ] || rename_present ||
     [ -f "$(host "$SOUND_RULE")" ] || [ -f "$(host "$MM_RULE")" ]; then
     say "   the old appliance is not running: when Aster has taken over, \`aster migrate cleanup\` removes what it left"
@@ -780,7 +780,7 @@ cmd_cutover() {
   set_phase cutover
   say ""
   say "Aster carries the calls now. Still to do, in this order:"
-  say "  1. Overview → Scan, then Assign each modem: that fills usb_port, and a modem stays stopped until it is set"
+  say "  1. each modem finds its USB port by itself; one that does not: its Modem page → Find the port again"
   say "  2. check that the phones registered (same host, same port — they need no change)"
   say "  3. check every call and SMS path; while any of them fails, \`aster migrate rollback\` brings the old appliance back"
   say "  4. when it all works: aster migrate cleanup"
@@ -949,7 +949,7 @@ cmd_replace() {
 
   say ""
   say "Aster has replaced the old appliance and runs on its own configuration. Still to do:"
-  say "  1. Overview → Scan, then Assign each modem: that fills usb_port, and a modem stays stopped until it is set"
+  say "  1. each modem finds its USB port by itself; one that does not: its Modem page → Find the port again"
   say "  2. the phones: Aster's, not the old sip.conf — a desk phone registers once its number and password match the"
   say "     Phones page (a fresh install has 501–515, each with its own number as the password: change those)"
   say "  3. Settings: the Telegram bot token and the chat ids. A bot the old appliance used has its token in the old"

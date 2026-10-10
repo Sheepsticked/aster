@@ -72,6 +72,11 @@ export function remapReason(modem, { observedPort, usbPresent, seen, registeredP
   }
   const elsewhere = seen.find((row) => row.present === 1 && row.imei === modem.imei && row.usb_port !== modem.usb_port);
   if (elsewhere) return `IMEI ${modem.imei} was seen on USB port ${elsewhere.usb_port}${modem.usb_port === null ? '' : `, not on ${modem.usb_port}`}`;
+  // A UAC modem without a port is kept stopped, so no driver ever reports one (an imported modem starts like this).
+  if (modem.usb_port === null && usbPresent) {
+    const free = usbPresent.filter((device) => device.driver === modem.driver && !registeredPorts.has(device.port)).map((device) => device.port);
+    if (free.length > 0) return `the registry has no usb_port yet while an unregistered ${VENDOR_OF[modem.driver]} device is present on ${free.join(', ')}`;
+  }
   return null;
 }
 

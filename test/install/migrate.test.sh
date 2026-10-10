@@ -291,7 +291,7 @@ check "the phase is cutover" "$(phase)" cutover
 
 out=$(run check); status=$?
 check "check after the cutover finds no conflict" "$status" 0
-has "and points at Scan and Assign" "$out" 'Scan, then Assign each modem'
+has "and says how a modem gets its USB port" "$out" 'each modem finds its USB port by itself'
 out=$(run cutover --yes); status=$?
 check "a second cutover is a no-op" "$(grep -c 'docker stop' "$FAKE/log")" 0
 has "that says so" "$out" 'the cutover was done already'

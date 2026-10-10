@@ -66,7 +66,7 @@ function harness(modems, { connected = true, spec = TWO_MODEMS } = {}) {
 }
 
 describe('devices remap', () => {
-  test('remapReason: moved, auto-fill, consistent, unplugged with a free device of the vendor, IMEI seen elsewhere, fixed ports and disabled never', () => {
+  test('remapReason: moved, auto-fill, consistent, unplugged with a free device of the vendor, IMEI seen elsewhere, no port yet with a free device, fixed ports and disabled never', () => {
     const registered = new Map([['1-2', 'ec25'], ['1-1', 'e173']]);
     const base = { usbPresent: [dongleAt('1-1'), quectelAt('1-2')], seen: [], registeredPorts: registered };
     assert.equal(remapReason(modem({}), { ...base, observedPort: '1-2' }), null);
@@ -80,6 +80,10 @@ describe('devices remap', () => {
     assert.equal(remapReason(modem({}), { ...base, observedPort: null, seen: [{ usb_port: '1-3', imei: '490154203237518', present: 1 }] }), 'IMEI 490154203237518 was seen on USB port 1-3, not on 1-2');
     assert.equal(remapReason(modem({ usb_port: null, uac: false }), { ...base, observedPort: null, seen: [{ usb_port: '1-3', imei: '490154203237518', present: 1 }] }), 'IMEI 490154203237518 was seen on USB port 1-3');
     assert.equal(remapReason(modem({}), { ...base, observedPort: null, seen: [{ usb_port: '1-3', imei: '490154203237518', present: 0 }] }), null, 'an unplugged port does not count');
+    const unmapped = { ...base, observedPort: null, usbPresent: [dongleAt('1-1'), quectelAt('1-3')], registeredPorts: new Map([['1-1', 'e173']]) };
+    assert.equal(remapReason(modem({ usb_port: null }), unmapped), 'the registry has no usb_port yet while an unregistered 2c7c device is present on 1-3', 'an imported UAC modem');
+    assert.equal(remapReason(modem({ usb_port: null }), { ...unmapped, registeredPorts: new Map([['1-1', 'e173'], ['1-3', 'other']]) }), null, 'the only device of the vendor belongs to another modem');
+    assert.equal(remapReason(modem({ usb_port: null, driver: 'dongle' }), { ...unmapped, registeredPorts: new Map([['1-1', 'e173']]) }), null, 'only another vendor is free');
     assert.equal(remapReason(modem({ ports: { data: '/dev/ttyUSB5', audio: '/dev/ttyUSB4' } }), { ...base, observedPort: '1-3' }), null);
     assert.equal(remapReason(modem({ enabled: false }), { ...base, observedPort: '1-3' }), null);
   });

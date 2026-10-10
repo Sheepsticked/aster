@@ -17,9 +17,9 @@ how it was mapped:
 assumptions — check every one of these:
   - no temp directory was given, so for every slot: the driver is dongle (what the old UI itself falls back to when it cannot read the type file) and the modem was running. Both are on the old host in /srv/asterisk/temp — tools/hw-probe.sh prints them
   - GSM1: IMEI 490154203237542 taken from [GSM1] of dongle.conf
-  - GSM1: usb_port unknown — run Scan and Assign after the cutover
+  - GSM1: usb_port unknown — Aster fills it in after the cutover
   - GSM2: IMEI 356938035643817 taken from [GSM2] of dongle.conf
-  - GSM2: usb_port unknown — run Scan and Assign after the cutover
+  - GSM2: usb_port unknown — Aster fills it in after the cutover
   - settings.timezone stays UTC — the old appliance has no time zone setting; set it on the Settings page
 
 not carried over:

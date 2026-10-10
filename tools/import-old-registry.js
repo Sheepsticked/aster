@@ -299,8 +299,8 @@ export function importOld(files) {
       recipients: read.recipients,
       ports: null,
     });
-    if (uac) note('assumption', about('usb_port unknown — it is not in the old configuration at all (the old ALSA card was named after the IMEI): the modem stays stopped until Scan and Assign fill it in'));
-    else note('assumption', about('usb_port unknown — run Scan and Assign after the cutover'));
+    if (uac) note('assumption', about('usb_port unknown — it is not in the old configuration at all (the old ALSA card was named after the IMEI): the modem stays stopped until Aster finds the port after the cutover (or its Modem page → Find the port again)'));
+    else note('assumption', about('usb_port unknown — Aster fills it in after the cutover'));
   }
 
   // Two slots with the same IMEI are one modem (the old UI allowed it); the registry refuses a duplicate, so the
