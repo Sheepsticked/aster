@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Subject: [PATCH] an unexpected ERROR no longer crashes Asterisk
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: at_response_error() logs an ERROR, +CME ERROR or +CMS ERROR that
+         arrives while the command queue is empty through
+         log_cmd_response_error(), which read the flags of the missing
+         command: a NULL dereference that ended Asterisk with SIGSEGV
+         (applies on top of 0012)
+
+Such an error comes from a late answer after the driver gave up waiting
+and reconnected, or from a modem that sends an extra error. It is now
+logged as "Received unexpected 'ERROR'" like the other unexpected results.
+---
+ at_response.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/at_response.c b/at_response.c
+index bb96a50..68740ed 100644
+--- a/at_response.c
++++ b/at_response.c
+@@ -448,7 +448,8 @@ static void log_cmd_response_error(const struct pvt* pvt, const at_queue_cmd_t *
+ 	va_list ap;
+ 	char tempbuff[512];
+ 
+-	if (at_cmd_suppress_error_mode(ecmd->flags) == SUPPRESS_ERROR_ENABLED) {
++	/* an error with no command waiting for it (a late or extra answer) has no flags to read */
++	if (ecmd && at_cmd_suppress_error_mode(ecmd->flags) == SUPPRESS_ERROR_ENABLED) {
+ 		if (DEBUG_ATLEAST(1)) {
+ 			ast_log(AST_LOG_DEBUG, "[%s] Command response error suppressed:\n", PVT_ID(pvt));
+ 			va_start(ap, fmt);
