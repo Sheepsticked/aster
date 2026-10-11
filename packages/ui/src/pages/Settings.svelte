@@ -6,6 +6,7 @@
   import ChipList from '../lib/ChipList.svelte';
   import Field from '../lib/Field.svelte';
   import Section from '../lib/Section.svelte';
+  import StatusBadge from '../lib/StatusBadge.svelte';
   import StickyActions from '../lib/StickyActions.svelte';
   import { messageOf, problemsElsewhere, problemsFor, problemsOf } from '../lib/errors.js';
   import { orNone, uptime } from '../lib/format.js';
@@ -307,7 +308,10 @@
     </form>
 
     <!-- The token is a secret, not a registry field: it has its own button and is never read back. -->
-    <Section id="settings-telegram" title={t('settings.telegram')} subtitle={settings.telegram_token_set ? t('settings.token_set') : t('settings.token_unset')}>
+    <Section id="settings-telegram" title={t('settings.telegram')} subtitle={settings.telegram_token_set ? undefined : t('settings.token_unset')}>
+      {#snippet aside()}
+        <StatusBadge text={settings.telegram_token_set ? t('settings.token_state_set') : t('settings.token_state_unset')} tone={settings.telegram_token_set ? 'ok' : 'bad'} />
+      {/snippet}
       <div class="flex flex-col gap-4">
         <Field id="settings-token" label={t('settings.token')} hint={t('settings.token_hint')}>
           {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}

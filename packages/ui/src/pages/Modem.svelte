@@ -11,6 +11,7 @@
   import Section from '../lib/Section.svelte';
   import SignalBars from '../lib/SignalBars.svelte';
   import StateBadge from '../lib/StateBadge.svelte';
+  import StatusBadge from '../lib/StatusBadge.svelte';
   import StickyActions from '../lib/StickyActions.svelte';
   import { messageOf, problemsElsewhere, problemsFor, problemsOf } from '../lib/errors.js';
   import { ago, dateTime, orNone, time } from '../lib/format.js';
@@ -33,6 +34,12 @@
   const USSD_CODE = /^[0-9*#]{1,64}$/;
   /** The VoLTE settings a Quectel modem keeps (at/volte.js). */
   const VOLTE_MODES = Object.freeze(['default', 'on', 'off']);
+  /** The VoLTE status block's colours by tone: green when calls over 4G work, red when they do not, grey when unknown. */
+  const VOLTE_PANEL = Object.freeze({
+    ok: 'bg-emerald-50 text-emerald-900 ring-emerald-300',
+    bad: 'bg-rose-50 text-rose-900 ring-rose-300',
+    neutral: 'bg-slate-50 text-slate-700 ring-slate-200',
+  });
   const OWN_NUMBER = /^\+[0-9]{6,15}$/;
   /** Action rows: on/off, then recovery. `when` applies only to actions that can wait for a call to end. */
   const ACTION_ROWS = Object.freeze([['start', 'stop'], ['restart', 'reset', 'remap']]);
@@ -105,6 +112,7 @@
   /** @type {string | null} */
   let volteNote = $state(null);
   const volteChoice = $derived(volteMode ?? volte?.mode ?? 'default');
+  const volteTone = $derived(volte?.ready === true ? 'ok' : volte?.ready === false ? 'bad' : 'neutral');
   /** The Phone number field: filled once, from the number entered by hand or else the one the SIM reports. */
   let ownNumber = $state(/** @type {string | null} */ (null));
   let numberBusy = $state(/** @type {'save' | 'sim' | null} */ (null));
@@ -215,8 +223,8 @@
   const radio = $derived.by(() => {
     if (shown === null || !shown.detail) return { text: orNone(null), pending: false };
     if (shown.detail.radio === null || shown.detail.radio === undefined) return { text: t('modem.radio_unsupported'), pending: true };
-    if (shown.enabled) return { text: t('modem.radio_on'), pending: false };
-    return shown.driver_state === 'Radio off' ? { text: t('modem.radio_off'), pending: false } : { text: t('modem.radio_off_pending'), pending: true };
+    if (shown.enabled) return { text: t('modem.radio_on'), pending: false, tone: 'ok' };
+    return shown.driver_state === 'Radio off' ? { text: t('modem.radio_off'), pending: false, tone: 'bad' } : { text: t('modem.radio_off_pending'), pending: true };
   });
 
   /** The states in which a modem tries and fails; there the driver's last error says why. Not while a restart of Aster's
@@ -643,7 +651,7 @@
           </div>
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('modem.radio')}</dt>
-            <dd class="min-w-0 truncate text-right {radio.pending ? 'text-amber-800' : ''}">{radio.text}</dd>
+            <dd class="min-w-0 truncate text-right {radio.pending ? 'text-amber-800' : radio.tone === 'ok' ? 'font-medium text-emerald-800' : radio.tone === 'bad' ? 'font-medium text-rose-800' : ''}">{radio.text}</dd>
           </div>
           <div class="flex items-center justify-between gap-3">
             <dt class="text-slate-500">{t('modem.seen')}</dt>
@@ -912,13 +920,19 @@
       {#if shown.driver === 'quectel'}
         <Section id="modem-volte" title={t('volte.title')} subtitle={t('volte.hint')}>
           <div class="flex flex-col gap-3">
-            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm" role="status">
+            <div id="volte-state" class="flex flex-col gap-1 rounded-lg px-3 py-2 text-sm ring-1 ring-inset {VOLTE_PANEL[volte ? volteTone : 'neutral']}" role="status">
               {#if !volte}
-                <p class="text-slate-600">{t('volte.never')}</p>
+                <p>{t('volte.never')}</p>
               {:else}
-                <p class="font-medium">{volte.ready === true ? t('volte.state_ready') : volte.ready === false ? t('volte.state_not_ready') : t('volte.state_unknown')}</p>
-                <p class="text-slate-600">{t('volte.mode_now', { mode: t(`volte.mode_${volte.mode ?? 'unknown'}`) })}</p>
-                <p class="text-xs text-slate-500">{t('volte.profile', { profile: volte.profile ?? t('volte.no_profile') })} · {t('volte.checked', { when: dateTime(volte.observed_at) })}</p>
+                <p class="flex items-center gap-2 font-semibold">
+                  <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-current" aria-hidden="true"></span>
+                  {volte.ready === true ? t('volte.state_ready') : volte.ready === false ? t('volte.state_not_ready') : t('volte.state_unknown')}
+                </p>
+                <p class="flex flex-wrap items-center gap-2">
+                  {t('volte.mode_now')}
+                  <StatusBadge text={t(`volte.mode_${volte.mode ?? 'unknown'}`)} tone={volte.mode === 'on' ? 'ok' : volte.mode === 'off' ? 'bad' : 'neutral'} class="px-2 py-0.5 text-xs" />
+                </p>
+                <p class="text-xs opacity-80">{t('volte.profile', { profile: volte.profile ?? t('volte.no_profile') })} · {t('volte.checked', { when: dateTime(volte.observed_at) })}</p>
               {/if}
             </div>
             {#if volte?.mode === 'on' && volte.ready === false}

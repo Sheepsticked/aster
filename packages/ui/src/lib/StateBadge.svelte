@@ -13,7 +13,7 @@
     'no-network': 'bg-amber-100 text-amber-900 ring-amber-300',
     unmapped: 'bg-amber-100 text-amber-900 ring-amber-300',
     stopped: 'bg-slate-200 text-slate-800 ring-slate-300',
-    disabled: 'bg-slate-200 text-slate-800 ring-slate-300',
+    disabled: 'bg-rose-100 text-rose-900 ring-rose-300',
     unverified: 'bg-slate-200 text-slate-800 ring-slate-300',
     absent: 'bg-rose-100 text-rose-900 ring-rose-300',
     flapping: 'bg-rose-100 text-rose-900 ring-rose-300',

@@ -564,7 +564,9 @@ test.describe('the modem page', () => {
     await page.goto('/modems/gsm1');
     const box = await openSection(page, 'modem-volte');
     await expect(box.getByText(ru['volte.state_not_ready'])).toBeVisible();
-    await expect(box.getByText(ru['volte.mode_now'].replace('{mode}', ru['volte.mode_default']))).toBeVisible();
+    const state = box.locator('#volte-state');
+    await expect(state).toHaveClass(/bg-rose-50/);
+    await expect(state).toContainText(`${ru['volte.mode_now']} ${ru['volte.mode_default']}`);
     const save = box.getByRole('button', { name: ru['volte.save'] });
     await expect(save).toBeDisabled();
     await box.getByLabel(ru['volte.mode'], { exact: true }).selectOption('on');
@@ -574,6 +576,8 @@ test.describe('the modem page', () => {
     await dialog.getByRole('button', { name: ru['volte.save'] }).click();
     await expect(box.getByText(ru['volte.saved'])).toBeVisible({ timeout: 15_000 });
     await expect(box.getByText(ru['volte.state_ready'])).toBeVisible();
+    await expect(state).toHaveClass(/bg-emerald-50/);
+    await expect(state.getByText(ru['volte.mode_on'], { exact: true })).toHaveClass(/bg-emerald-100/);
     await expect(box.getByText(ru['volte.profile'].replace('{profile}', 'ROW_Generic_3GPP'), { exact: false })).toBeVisible();
     await expect(save).toBeDisabled();
     await page.screenshot({ path: `test-results/screens/${info.project.name}-volte.png`, fullPage: true });
@@ -968,7 +972,7 @@ test.describe('the settings page', () => {
     await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
     await expect(retention.getByLabel(ru['settings.retention_operations'])).toHaveValue('60');
     await expect(retention.getByLabel(ru['settings.retention_messages'])).toHaveValue('365');
-    await expect(page.getByText(ru['settings.token_set']).first()).toBeVisible();
+    await expect(page.locator('#settings-telegram').getByText(ru['settings.token_state_set'], { exact: true })).toBeVisible();
   });
 
   test('keeps the sections folded on a phone and open where there is room', async ({ page }, info) => {
