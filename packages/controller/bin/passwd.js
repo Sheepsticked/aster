@@ -7,15 +7,16 @@
 // Usage: node bin/passwd.js [--hash]   (--hash: print the hash for a password read from stdin/ASTER_ADMIN_PASSWORD, write nothing)
 import { existsSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { Writable } from 'node:stream';
 import { parseArgs } from 'node:util';
 import { createSecretsStore, loadEnv } from '../src/env.js';
 import { checkPassword, HASH_KEY, hashPassword } from '../src/http/auth.js';
 import { open } from '../src/store/db.js';
 
-/** @param {string} message @returns {never} */
-function fail(message) {
+/** @param {string} message @param {number} [code] @returns {never} */
+function fail(message, code = 2) {
   process.stderr.write(`passwd.js: ${message}\n`);
-  process.exit(2);
+  process.exit(code);
 }
 
 /**
@@ -24,16 +25,36 @@ function fail(message) {
  * @returns {Promise<string>}
  */
 function ask(prompt) {
-  const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
-  // The prompt is written once; every keystroke after it prints nothing (readline's own echo is replaced).
-  /** @type {{ _writeToOutput: (text: string) => void }} */ (/** @type {unknown} */ (rl))._writeToOutput = () => {};
-  process.stderr.write(prompt);
+  let muted = false;
+  const output = new Writable({
+    write(chunk, encoding, callback) {
+      if (!muted) process.stderr.write(chunk, encoding);
+      callback();
+    },
+  });
+  const rl = createInterface({ input: process.stdin, output, terminal: true });
   return new Promise((resolve) => {
-    rl.question('', (answer) => {
-      process.stderr.write('\n');
+    const cleanup = () => {
+      rl.removeListener('close', onClose);
+      rl.removeListener('SIGINT', onInterrupt);
       rl.close();
+      process.stderr.write('\n');
+    };
+    /** @param {number} code */
+    const cancel = (code) => {
+      cleanup();
+      fail('cancelled; nothing was written', code);
+    };
+    const onClose = () => cancel(2);
+    const onInterrupt = () => cancel(130);
+    rl.once('close', onClose);
+    rl.once('SIGINT', onInterrupt);
+    // Let readline refresh and write the prompt before suppressing all echo and cursor movement.
+    rl.question(prompt, (answer) => {
+      cleanup();
       resolve(answer);
     });
+    muted = true;
   });
 }
 
