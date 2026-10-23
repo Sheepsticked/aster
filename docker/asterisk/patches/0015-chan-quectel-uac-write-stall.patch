@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Subject: [PATCH] uac: bound the playback write wait, drop frames, reopen the
+ card
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: with uac, the call's audio write sat in an unbounded retry while it
+         held the device lock once the kernel's USB audio driver stopped
+         draining the playback buffer, so the hangup was never handled, the
+         CLI and AMI blocked and the call had no audio (applies on top of
+         0014)
+
+Upstream's channel_write() retries a playback write that answers -EAGAIN
+(buffer full) every microsecond for as long as it takes, and a buffer that
+stays full keeps the device lock for ever. The wait is now at most one
+20 ms frame, in 1 ms steps, and none after a frame was dropped until a
+write goes through again. A frame that does not fit is dropped (the write
+still answers success, as for an XRUN) and counted. After 25 drops in a row
+the sound card is closed and opened again, as for a playback stream that
+never runs: emptying the buffer (snd_pcm_drop() and snd_pcm_prepare()) does
+not get a stuck stream going, a reopened card does. While the buffer stays
+full the card is reopened again every 250 further drops. The per-call line
+gains "N frames dropped (playback full)".
+---
+ chan_quectel.h |  6 ++++++
+ channel.c      | 58 +++++++++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 56 insertions(+), 8 deletions(-)
+
+diff --git a/chan_quectel.h b/chan_quectel.h
+index 8fb47a0..366da84 100644
+--- a/chan_quectel.h
++++ b/chan_quectel.h
+@@ -29,6 +29,9 @@
+ #include <alsa/asoundlib.h>
+ #define PERIOD_FRAMES           80
+ #define UAC_XRUN_STREAK_REOPEN  25	/* playback writes ending in XRUN, one after the other, before the card is reopened: 0.5 s of 20 ms frames */
++#define UAC_WRITE_WAIT_MS       20	/* longest wait for room in the playback buffer: one 20 ms frame */
++#define UAC_STALL_STREAK_REOPEN 25	/* playback frames dropped, one after the other, before the card is reopened: 0.5 s of 20 ms frames */
++#define UAC_STALL_REOPEN_RETRY  250	/* further dropped frames before the card is reopened again while the buffer stays full: 5 s */
+ #define DESIRED_RATE 8000
+ #define ALSA_PCM_NEW_HW_PARAMS_API
+ #define ALSA_PCM_NEW_SW_PARAMS_API
+@@ -152,6 +155,9 @@ typedef struct pvt
+ 	unsigned int		uac_underruns;			/*!< playback XRUNs of the current call */
+ 	unsigned int		uac_xrun_streak;		/*!< playback writes that ended in XRUN since the last one that did not */
+ 	unsigned int		uac_reopens;			/*!< sound card reopened during the current call (see channel_write()) */
++	unsigned int		uac_drops;			/*!< playback frames dropped in the current call because the buffer stayed full */
++	unsigned int		uac_stall_streak;		/*!< playback frames dropped since the last write that went through */
++	unsigned int		uac_stall_reopen_at;		/*!< stall streak at which the sound card is reopened next */
+ 	int			audio_fd;			/*!< audio descriptor */
+ 	int			data_fd;			/*!< data descriptor */
+ 	char			* alock;			/*!< name of lockfile for audio */
+diff --git a/channel.c b/channel.c
+index fc5268f..9d8c198 100644
+--- a/channel.c
++++ b/channel.c
+@@ -318,7 +318,7 @@ static void disactivate_call(struct cpvt* cpvt)
+                 if (strcmp(CONF_UNIQ(pvt, quec_uac),"1") == 0) {
+ 			if (pvt->icard) snd_pcm_drop(pvt->icard);
+ 			/* the only trace of a starved or overflowing sound card: upstream logs an XRUN only in a DEBUG build */
+-			ast_verb (3, "[%s] UAC audio of this call: %u capture overruns, %u playback underruns, %u sound card reopens\n", PVT_ID(pvt), pvt->uac_overruns, pvt->uac_underruns, pvt->uac_reopens);
++			ast_verb (3, "[%s] UAC audio of this call: %u capture overruns, %u playback underruns, %u sound card reopens, %u frames dropped (playback full)\n", PVT_ID(pvt), pvt->uac_overruns, pvt->uac_underruns, pvt->uac_reopens, pvt->uac_drops);
+ 		}
+ 		else mixb_detach(&cpvt->pvt->a_write_mixb, &cpvt->mixstream);
+ 		ast_channel_set_fd (cpvt->channel, 1, -1);
+@@ -392,6 +392,9 @@ static void activate_call(struct cpvt* cpvt)
+ 	        pvt->uac_underruns = 0;
+ 	        pvt->uac_xrun_streak = 0;
+ 	        pvt->uac_reopens = 0;
++	        pvt->uac_drops = 0;
++	        pvt->uac_stall_streak = 0;
++	        pvt->uac_stall_reopen_at = UAC_STALL_STREAK_REOPEN;
+                       }
+ //		rb_init (&cpvt->a_write_rb, cpvt->a_write_buf, sizeof (cpvt->a_write_buf));
+ //		cpvt->write = pvt->a_write_rb.write;
+@@ -975,6 +978,41 @@ e_return:
+ 
+ }
+ 
++/* Writes one frame to the playback stream without waiting more than a frame time for room (the caller holds the device
++ * lock); a frame that still does not fit is dropped and counted. */
++static int uac_playback_write (struct pvt* pvt, const short* buf, snd_pcm_uframes_t frames)
++{
++	unsigned int waits = pvt->uac_stall_streak ? 0 : UAC_WRITE_WAIT_MS;
++	int res;
++
++	while ((res = snd_pcm_writei(pvt->ocard, buf, frames)) == -EAGAIN) {
++		if (waits == 0)
++			break;
++		waits--;
++		usleep(1000);
++	}
++	if (res >= 0) {
++		pvt->uac_stall_streak = 0;
++		pvt->uac_stall_reopen_at = UAC_STALL_STREAK_REOPEN;
++	}
++	if (res != -EAGAIN)
++		return res;
++
++	pvt->uac_drops++;
++	pvt->uac_stall_streak++;
++	return frames;
++}
++
++/* True when the playback buffer stayed full for UAC_STALL_STREAK_REOPEN frames in a row, then every UAC_STALL_REOPEN_RETRY
++ * more: a stream the kernel's USB audio driver left stuck only runs again on a reopened card. */
++static int uac_stall_reopen_due (struct pvt* pvt)
++{
++	if (pvt->uac_stall_streak == 0 || pvt->uac_stall_streak < pvt->uac_stall_reopen_at)
++		return 0;
++	pvt->uac_stall_reopen_at = pvt->uac_stall_streak + UAC_STALL_REOPEN_RETRY;
++	return 1;
++}
++
+ #/* */
+ static int channel_write (struct ast_channel* channel, struct ast_frame* f)
+ {
+@@ -1159,6 +1197,7 @@ e_return:
+ 	short sizbuf[4000];	/* of this call, not function-static: see channel_read() */
+ 	int len = 0;
+ 	int res = 0;
++	int reopen;
+ 	/* size_t frames = 0; */
+ 	snd_pcm_state_t state;
+ 
+@@ -1187,10 +1226,17 @@ e_return:
+ 		 * reaching the modem — the far end hears nothing while the device looks fine (seen with an EC25 on Linux
+ 		 * 6.18's snd_usb_audio in its low-latency mode). Closing and reopening the card once gives the driver a fresh
+ 		 * stream, which is what a `quectel restart` did by hand; the count goes to the per-call line either way. */
++		reopen = 0;
+ 		if (pvt->uac_xrun_streak >= UAC_XRUN_STREAK_REOPEN && pvt->uac_reopens == 0) {
+-			pvt->uac_reopens++;
+ 			ast_log(LOG_WARNING, "[%s] the playback stream does not run (%u writes in a row ended in XRUN, nothing reaches the modem): reopening the sound card\n", PVT_ID(pvt), pvt->uac_xrun_streak);
+ 			pvt->uac_xrun_streak = 0;
++			reopen = 1;
++		} else if (uac_stall_reopen_due(pvt)) {	/* the same for a playback buffer that stays full */
++			ast_log(LOG_WARNING, "[%s] the playback buffer stays full, nothing reaches the modem (%u frames in a row dropped): reopening the sound card\n", PVT_ID(pvt), pvt->uac_stall_streak);
++			reopen = 1;
++		}
++		if (reopen) {
++			pvt->uac_reopens++;
+ 			if (soundcard_reopen(pvt) == 0) {
+ 				snd_pcm_prepare(pvt->icard);
+ 				snd_pcm_start(pvt->icard);
+@@ -1212,9 +1258,7 @@ e_return:
+ 		} else if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
+ 			snd_pcm_prepare(pvt->ocard);	/* SETUP would answer -EBADFD; see activate_call() */
+ 		}
+-		while ((res = snd_pcm_writei(pvt->ocard, sizbuf, len / 2)) == -EAGAIN) {
+-			usleep(1);
+-		}
++		res = uac_playback_write(pvt, sizbuf, len / 2);
+ 		if (res == -EPIPE) {
+ 			pvt->uac_underruns++;
+ 			pvt->uac_xrun_streak++;
+@@ -1222,9 +1266,7 @@ e_return:
+ 			ast_debug(1, "XRUN write\n");
+ #endif
+ 			snd_pcm_prepare(pvt->ocard);
+-			while ((res = snd_pcm_writei(pvt->ocard, sizbuf, len / 2)) == -EAGAIN) {
+-				usleep(1);
+-			}
++			res = uac_playback_write(pvt, sizbuf, len / 2);
+ 			if (res != len / 2) {
+ 				ast_log(LOG_ERROR, "Write error: %s\n", snd_strerror(res));
+ 				res = -1;
