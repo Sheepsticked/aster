@@ -1,0 +1,120 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sheepsticked <72666364+Sheepsticked@users.noreply.github.com>
+Subject: [PATCH] uac: start the playback stream with a margin of silence
+
+Upstream: https://github.com/IchthysMaranatha/asterisk-chan-quectel @ 3d45c7f072131296a7e3c1a4faf5bb18751dbd87
+Purpose: with uac, the audio sent to the modem came in short pieces with gaps
+         on some calls (choppy sound): the playback stream ran dry before
+         every pair of frames and was stopped and started again each time
+         (applies on top of 0015)
+
+The playback stream starts at one period, two 20 ms frames, and the frames of
+a call can arrive in pairs every 40 ms. A stream started with just two frames
+has run dry by the time the next pair arrives, ends in XRUN, is prepared and
+started with two frames again, and does so for the rest of the call. The
+kernel's USB audio driver stops draining a stream that is restarted like this
+often enough. Every prepared stream now gets 160 frames (20 ms) of silence
+ahead of its first frame: at the start of a call, after an XRUN and after the
+sound card is reopened. Frames that arrive up to that much late no longer
+end in XRUN.
+---
+ chan_quectel.h |  2 ++
+ channel.c      | 29 ++++++++++++++++++++++++++---
+ 2 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/chan_quectel.h b/chan_quectel.h
+index 48ce06b..ccf4e59 100644
+--- a/chan_quectel.h
++++ b/chan_quectel.h
+@@ -32,6 +32,7 @@
+ #define UAC_WRITE_WAIT_MS       20	/* longest wait for room in the playback buffer: one 20 ms frame */
+ #define UAC_STALL_STREAK_REOPEN 25	/* playback frames dropped, one after the other, before the card is reopened: 0.5 s of 20 ms frames */
+ #define UAC_STALL_REOPEN_RETRY  250	/* further dropped frames before the card is reopened again while the buffer stays full: 5 s */
++#define UAC_PLAY_MARGIN         160	/* frames of silence queued before the first frame of a prepared playback stream: 20 ms */
+ #define DESIRED_RATE 8000
+ #define ALSA_PCM_NEW_HW_PARAMS_API
+ #define ALSA_PCM_NEW_SW_PARAMS_API
+@@ -159,6 +160,7 @@ typedef struct pvt
+ 	unsigned int		uac_drops;			/*!< playback frames dropped in the current call because the buffer stayed full */
+ 	unsigned int		uac_stall_streak;		/*!< playback frames dropped since the last write that went through */
+ 	unsigned int		uac_stall_reopen_at;		/*!< stall streak at which the sound card is reopened next */
++	unsigned int		uac_play_primed;		/*!< the prepared playback stream has its margin of silence */
+ 	int			audio_fd;			/*!< audio descriptor */
+ 	int			data_fd;			/*!< data descriptor */
+ 	char			* alock;			/*!< name of lockfile for audio */
+diff --git a/channel.c b/channel.c
+index a568e6c..76b33ff 100644
+--- a/channel.c
++++ b/channel.c
+@@ -396,6 +396,7 @@ static void activate_call(struct cpvt* cpvt)
+ 	        pvt->uac_drops = 0;
+ 	        pvt->uac_stall_streak = 0;
+ 	        pvt->uac_stall_reopen_at = UAC_STALL_STREAK_REOPEN;
++	        pvt->uac_play_primed = 0;
+                       }
+ //		rb_init (&cpvt->a_write_rb, cpvt->a_write_buf, sizeof (cpvt->a_write_buf));
+ //		cpvt->write = pvt->a_write_rb.write;
+@@ -979,6 +980,26 @@ e_return:
+ 
+ }
+ 
++/* Prepares the playback stream; its first frame is preceded by UAC_PLAY_MARGIN frames of silence. */
++static void uac_playback_prepare (struct pvt* pvt)
++{
++	snd_pcm_prepare(pvt->ocard);
++	pvt->uac_play_primed = 0;
++}
++
++/* Queues the margin of silence in a prepared playback stream. Started with just the two frames of its start threshold, the
++ * stream runs dry before the next pair of frames arrives, and then every pair ends in XRUN and a restart. */
++static void uac_playback_prime (struct pvt* pvt)
++{
++	static const short silence[UAC_PLAY_MARGIN];
++
++	if (pvt->uac_play_primed)
++		return;
++	pvt->uac_play_primed = 1;
++	if (snd_pcm_state(pvt->ocard) == SND_PCM_STATE_PREPARED)
++		snd_pcm_writei(pvt->ocard, silence, UAC_PLAY_MARGIN);
++}
++
+ /* Writes one frame to the playback stream without waiting more than a frame time for room (the caller holds the device
+  * lock); a frame that still does not fit is dropped and counted. */
+ static int uac_playback_write (struct pvt* pvt, const short* buf, snd_pcm_uframes_t frames)
+@@ -986,6 +1007,7 @@ static int uac_playback_write (struct pvt* pvt, const short* buf, snd_pcm_uframe
+ 	unsigned int waits = pvt->uac_stall_streak ? 0 : UAC_WRITE_WAIT_MS;
+ 	int res;
+ 
++	uac_playback_prime(pvt);
+ 	while ((res = snd_pcm_writei(pvt->ocard, buf, frames)) == -EAGAIN) {
+ 		if (waits == 0)
+ 			break;
+@@ -1251,6 +1273,7 @@ e_return:
+ 			if (soundcard_reopen(pvt) == 0) {
+ 				snd_pcm_prepare(pvt->icard);
+ 				snd_pcm_start(pvt->icard);
++				pvt->uac_play_primed = 0;
+ 				pvt->uac_readpos = 0;
+ 				pvt->uac_left = FRAME_SIZE2;
+ 				if (cpvt->channel)
+@@ -1265,9 +1288,9 @@ e_return:
+ 		state = snd_pcm_state(pvt->ocard);
+ 		if (state == SND_PCM_STATE_XRUN) {
+ 			pvt->uac_underruns++;
+-			snd_pcm_prepare(pvt->ocard);
++			uac_playback_prepare(pvt);
+ 		} else if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
+-			snd_pcm_prepare(pvt->ocard);	/* SETUP would answer -EBADFD; see activate_call() */
++			uac_playback_prepare(pvt);	/* SETUP would answer -EBADFD; see activate_call() */
+ 		}
+ 		res = uac_playback_write(pvt, sizbuf, len / 2);
+ 		if (res == -EPIPE) {
+@@ -1276,7 +1299,7 @@ e_return:
+ #if DEBUG
+ 			ast_debug(1, "XRUN write\n");
+ #endif
+-			snd_pcm_prepare(pvt->ocard);
++			uac_playback_prepare(pvt);
+ 			res = uac_playback_write(pvt, sizbuf, len / 2);
+ 			if (res != len / 2) {
+ 				ast_log(LOG_ERROR, "Write error: %s\n", snd_strerror(res));
