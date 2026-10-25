@@ -21,13 +21,16 @@ never runs: emptying the buffer (snd_pcm_drop() and snd_pcm_prepare()) does
 not get a stuck stream going, a reopened card does. While the buffer stays
 full the card is reopened again every 250 further drops. The per-call line
 gains "N frames dropped (playback full)".
+
+The reopen for a playback stream that ends in XRUN stays one per call; it has
+its own flag, so a reopen for a full buffer does not use it up.
 ---
- chan_quectel.h |  6 ++++++
- channel.c      | 58 +++++++++++++++++++++++++++++++++++++++++++-------
- 2 files changed, 56 insertions(+), 8 deletions(-)
+ chan_quectel.h |  7 +++++
+ channel.c      | 71 +++++++++++++++++++++++++++++++++++++++++++-------
+ 2 files changed, 69 insertions(+), 9 deletions(-)
 
 diff --git a/chan_quectel.h b/chan_quectel.h
-index 8fb47a0..366da84 100644
+index 8fb47a0..48ce06b 100644
 --- a/chan_quectel.h
 +++ b/chan_quectel.h
 @@ -29,6 +29,9 @@
@@ -40,10 +43,11 @@ index 8fb47a0..366da84 100644
  #define DESIRED_RATE 8000
  #define ALSA_PCM_NEW_HW_PARAMS_API
  #define ALSA_PCM_NEW_SW_PARAMS_API
-@@ -152,6 +155,9 @@ typedef struct pvt
+@@ -152,6 +155,10 @@ typedef struct pvt
  	unsigned int		uac_underruns;			/*!< playback XRUNs of the current call */
  	unsigned int		uac_xrun_streak;		/*!< playback writes that ended in XRUN since the last one that did not */
  	unsigned int		uac_reopens;			/*!< sound card reopened during the current call (see channel_write()) */
++	unsigned int		uac_xrun_reopened;		/*!< the reopen for a playback stream that ends in XRUN was used in the current call */
 +	unsigned int		uac_drops;			/*!< playback frames dropped in the current call because the buffer stayed full */
 +	unsigned int		uac_stall_streak;		/*!< playback frames dropped since the last write that went through */
 +	unsigned int		uac_stall_reopen_at;		/*!< stall streak at which the sound card is reopened next */
@@ -51,7 +55,7 @@ index 8fb47a0..366da84 100644
  	int			data_fd;			/*!< data descriptor */
  	char			* alock;			/*!< name of lockfile for audio */
 diff --git a/channel.c b/channel.c
-index fc5268f..9d8c198 100644
+index fc5268f..a568e6c 100644
 --- a/channel.c
 +++ b/channel.c
 @@ -318,7 +318,7 @@ static void disactivate_call(struct cpvt* cpvt)
@@ -63,17 +67,18 @@ index fc5268f..9d8c198 100644
  		}
  		else mixb_detach(&cpvt->pvt->a_write_mixb, &cpvt->mixstream);
  		ast_channel_set_fd (cpvt->channel, 1, -1);
-@@ -392,6 +392,9 @@ static void activate_call(struct cpvt* cpvt)
+@@ -392,6 +392,10 @@ static void activate_call(struct cpvt* cpvt)
  	        pvt->uac_underruns = 0;
  	        pvt->uac_xrun_streak = 0;
  	        pvt->uac_reopens = 0;
++	        pvt->uac_xrun_reopened = 0;
 +	        pvt->uac_drops = 0;
 +	        pvt->uac_stall_streak = 0;
 +	        pvt->uac_stall_reopen_at = UAC_STALL_STREAK_REOPEN;
                        }
  //		rb_init (&cpvt->a_write_rb, cpvt->a_write_buf, sizeof (cpvt->a_write_buf));
  //		cpvt->write = pvt->a_write_rb.write;
-@@ -975,6 +978,41 @@ e_return:
+@@ -975,6 +979,51 @@ e_return:
  
  }
  
@@ -112,10 +117,20 @@ index fc5268f..9d8c198 100644
 +	return 1;
 +}
 +
++/* True once per call, when UAC_XRUN_STREAK_REOPEN playback writes in a row ended in XRUN. Reopens for a full buffer do not
++ * use it up: uac_reopens is only the count shown on the per-call line. */
++static int uac_xrun_reopen_due (struct pvt* pvt)
++{
++	if (pvt->uac_xrun_streak < UAC_XRUN_STREAK_REOPEN || pvt->uac_xrun_reopened)
++		return 0;
++	pvt->uac_xrun_reopened = 1;
++	return 1;
++}
++
  #/* */
  static int channel_write (struct ast_channel* channel, struct ast_frame* f)
  {
-@@ -1159,6 +1197,7 @@ e_return:
+@@ -1159,6 +1208,7 @@ e_return:
  	short sizbuf[4000];	/* of this call, not function-static: see channel_read() */
  	int len = 0;
  	int res = 0;
@@ -123,13 +138,14 @@ index fc5268f..9d8c198 100644
  	/* size_t frames = 0; */
  	snd_pcm_state_t state;
  
-@@ -1187,10 +1226,17 @@ e_return:
+@@ -1187,10 +1237,17 @@ e_return:
  		 * reaching the modem — the far end hears nothing while the device looks fine (seen with an EC25 on Linux
  		 * 6.18's snd_usb_audio in its low-latency mode). Closing and reopening the card once gives the driver a fresh
  		 * stream, which is what a `quectel restart` did by hand; the count goes to the per-call line either way. */
-+		reopen = 0;
- 		if (pvt->uac_xrun_streak >= UAC_XRUN_STREAK_REOPEN && pvt->uac_reopens == 0) {
+-		if (pvt->uac_xrun_streak >= UAC_XRUN_STREAK_REOPEN && pvt->uac_reopens == 0) {
 -			pvt->uac_reopens++;
++		reopen = 0;
++		if (uac_xrun_reopen_due(pvt)) {
  			ast_log(LOG_WARNING, "[%s] the playback stream does not run (%u writes in a row ended in XRUN, nothing reaches the modem): reopening the sound card\n", PVT_ID(pvt), pvt->uac_xrun_streak);
  			pvt->uac_xrun_streak = 0;
 +			reopen = 1;
@@ -142,7 +158,7 @@ index fc5268f..9d8c198 100644
  			if (soundcard_reopen(pvt) == 0) {
  				snd_pcm_prepare(pvt->icard);
  				snd_pcm_start(pvt->icard);
-@@ -1212,9 +1258,7 @@ e_return:
+@@ -1212,9 +1269,7 @@ e_return:
  		} else if (state != SND_PCM_STATE_PREPARED && state != SND_PCM_STATE_RUNNING) {
  			snd_pcm_prepare(pvt->ocard);	/* SETUP would answer -EBADFD; see activate_call() */
  		}
@@ -153,7 +169,7 @@ index fc5268f..9d8c198 100644
  		if (res == -EPIPE) {
  			pvt->uac_underruns++;
  			pvt->uac_xrun_streak++;
-@@ -1222,9 +1266,7 @@ e_return:
+@@ -1222,9 +1277,7 @@ e_return:
  			ast_debug(1, "XRUN write\n");
  #endif
  			snd_pcm_prepare(pvt->ocard);
