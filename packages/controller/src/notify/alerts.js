@@ -1,6 +1,7 @@
 // @ts-check
 // Opt-in Telegram alerts: a modem in a problem state (ALERT_STATES) for a while, or AMI down for a while, raises one alert and
-// later one recovery. Active alerts are stored with their notifications so a restart neither repeats nor forgets them.
+// later one recovery. A modem that a person stopped (its newest finished lifecycle operation is a successful stop) is not a
+// problem. Active alerts are stored with their notifications so a restart neither repeats nor forgets them.
 import { hostname } from 'node:os';
 import { enqueue } from './queue.js';
 import { amiAlertText, amiRecoveredText, modemAlertText, modemRecoveredText } from './texts.js';
@@ -39,6 +40,11 @@ export const SETTINGS_KEY = 'alerts_active';
 const SILENT = { debug() {}, info() {}, warn() {}, error() {}, child: () => SILENT };
 /** @type {ReadonlySet<string>} */
 const PROBLEM = new Set(ALERT_STATES);
+/** Operations that start, stop or restart one modem; the newest finished one tells whether the modem was stopped on request. */
+const LIFECYCLE = Object.freeze(['modem-start', 'modem-stop', 'modem-restart', 'modem-reset', 'remap', 'volte']);
+const SELECT_LAST_LIFECYCLE = `SELECT kind, status FROM operations
+  WHERE modem_id = ? AND kind IN (${LIFECYCLE.map(() => '?').join(', ')}) AND status IN ('done', 'failed', 'uncertain')
+  ORDER BY finished_at DESC, id DESC LIMIT 1`;
 const SELECT_ACTIVE = 'SELECT value FROM settings WHERE key = ?';
 const UPSERT_ACTIVE = 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value';
 
@@ -83,6 +89,18 @@ export function createAlerts({ db, bus, ami, registry, log = SILENT, now = Date.
   let unsubscribe = null;
   let started = false;
   let registryMissing = false;
+  /** @type {import('node:sqlite').StatementSync | null} */
+  let lastLifecycle = null;
+
+  /**
+   * Whether the modem was stopped on request: its newest finished lifecycle operation is a successful stop.
+   * @param {string} modemId
+   */
+  function stoppedOnRequest(modemId) {
+    lastLifecycle ??= db.prepare(SELECT_LAST_LIFECYCLE);
+    const row = lastLifecycle.get(modemId, ...LIFECYCLE);
+    return row?.kind === 'modem-stop' && row.status === 'done';
+  }
 
   /**
    * @param {string} modemId
@@ -147,6 +165,8 @@ export function createAlerts({ db, bus, ami, registry, log = SILENT, now = Date.
       const alerted = next.modems[modem.id];
       const chatIds = routed(modem.recipients ?? reg.telegram.default_recipients);
       if (PROBLEM.has(entry.state)) {
+        // A requested stop is no problem, and the problem starts when it ends; a raised alert is left as it is.
+        if (!alerted && entry.state === 'stopped') entry.since = stoppedOnRequest(modem.id) ? null : entry.since ?? at;
         if (!alerted && enabled && entry.since !== null && at - entry.since >= t.modemMs) {
           messages.push({ chatIds, text: modemAlertText({ host: name, modem: modem.id, state: entry.state, since: entry.since, timeZone }) });
           result.alerts.push(modem.id);

@@ -62,6 +62,16 @@ function setup({ db, ami = { connected: true }, registry = registryWith(), clock
   return { db: database, bus, alerts, publish, notifications, stored, clock, state, ami };
 }
 
+/**
+ * A finished (by default successful) lifecycle operation of a modem, as the operations table keeps it.
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{ kind: string, modemId: string, at: number, status?: string }} operation
+ */
+function addOperation(db, { kind, modemId, at, status = 'done' }) {
+  db.prepare("INSERT INTO operations (kind, modem_id, status, actor, created_at, started_at, finished_at) VALUES (?, ?, ?, 'admin', ?, ?, ?)")
+    .run(kind, modemId, status, at - 2000, at - 1000, at);
+}
+
 describe('notify alerts', () => {
   test('a modem absent for 5 min raises one alert to its recipients; back to ready raises one recovery', () => {
     assert.deepEqual([...ALERT_STATES], ['absent', 'no-network', 'flapping', 'stopped', 'connecting']);
@@ -218,6 +228,112 @@ describe('notify alerts', () => {
     publish('gsm2', 'ready');
     alerts.check();
     assert.deepEqual(notifications().slice(3).map(([chat]) => chat), ['900', '900', '900']);
+  });
+
+  test('a modem stopped on request does not alert; the requested stop survives a restart of the controller', () => {
+    const clock = { now: T0 };
+    const first = setup({ clock });
+    first.alerts.start();
+    first.publish('gsm1', 'ready');
+    clock.now = T0 + MIN;
+    first.publish('gsm1', 'stopped');
+    clock.now = T0 + 2 * MIN;
+    addOperation(first.db, { kind: 'modem-stop', modemId: 'gsm1', at: clock.now });
+    clock.now = T0 + 11 * MIN;
+    assert.deepEqual(first.alerts.check(), { alerts: [], recoveries: [], skipped: null });
+    first.alerts.stop();
+
+    clock.now = T0 + 20 * MIN;
+    const second = setup({ db: first.db, clock });
+    second.alerts.start();
+    second.publish('gsm1', 'stopped');
+    clock.now = T0 + 40 * MIN;
+    assert.deepEqual(second.alerts.check(), { alerts: [], recoveries: [], skipped: null });
+    assert.equal(second.notifications().length, 0);
+    assert.equal(second.stored(), null);
+  });
+
+  test('a modem stopped by the driver alerts at 5 min even when other modems were stopped on request', () => {
+    const { db, alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm2', at: T0 - MIN });
+    publish('gsm1', 'stopped');
+    clock.now = T0 + 5 * MIN - 1;
+    assert.deepEqual(alerts.check().alerts, []);
+    clock.now = T0 + 5 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:00:00 +00:00']]);
+  });
+
+  test('a stop, then a start, then a stop by the driver alerts at 5 min', () => {
+    const { db, alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm1', at: T0 - 20 * MIN });
+    addOperation(db, { kind: 'modem-start', modemId: 'gsm1', at: T0 - 10 * MIN });
+    publish('gsm1', 'stopped');
+    clock.now = T0 + 5 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    assert.equal(notifications().length, 1);
+  });
+
+  test('a stop on request, then the modem turns absent: the alert comes 5 min after it went absent, not after the stop', () => {
+    const { db, alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    publish('gsm1', 'stopped');
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm1', at: T0 + 1000 });
+    clock.now = T0 + 10 * MIN;
+    assert.deepEqual(alerts.check().alerts, []);
+    publish('gsm1', 'absent');
+    clock.now = T0 + 15 * MIN - 1;
+    assert.deepEqual(alerts.check().alerts, []);
+    clock.now = T0 + 15 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:10:00 +00:00']]);
+  });
+
+  test('after a stop on request a start that fails leaves the modem stopped and it alerts 5 min later; a failed stop never exempts', () => {
+    const { db, alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm1', at: T0 - MIN });
+    publish('gsm1', 'stopped');
+    clock.now = T0 + 10 * MIN;
+    assert.deepEqual(alerts.check().alerts, []);
+    addOperation(db, { kind: 'modem-start', modemId: 'gsm1', at: T0 + 10 * MIN, status: 'failed' });
+    clock.now = T0 + 10 * MIN + 5000;
+    assert.deepEqual(alerts.check().alerts, [], 'the 5 min start with the failed start');
+    clock.now = T0 + 15 * MIN + 5000;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:10:05 +00:00']]);
+
+    publish('gsm2', 'stopped');
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm2', at: clock.now, status: 'failed' });
+    clock.now += 5 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm2']);
+  });
+
+  test('a stop on request after an alert was raised leaves that alert alone; every other state still alerts after a stop on request', () => {
+    const { db, alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    publish('gsm1', 'stopped');
+    clock.now = T0 + 5 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm1', at: clock.now });
+    clock.now = T0 + 30 * MIN;
+    assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null }, 'neither a second alert nor a recovery');
+    publish('gsm1', 'ready');
+    assert.deepEqual(alerts.check().recoveries, ['gsm1']);
+    assert.equal(notifications().length, 2);
+
+    addOperation(db, { kind: 'modem-stop', modemId: 'gsm2', at: clock.now });
+    for (const state of ['flapping', 'connecting', 'no-network']) {
+      publish('gsm2', 'ready');
+      alerts.check();
+      publish('gsm2', state);
+      clock.now += 5 * MIN;
+      assert.deepEqual(alerts.check().alerts, ['gsm2'], state);
+      publish('gsm2', 'ready');
+      assert.deepEqual(alerts.check().recoveries, ['gsm2'], state);
+    }
   });
 
   test('AMI not up for 2 min raises one alert to the default recipients; up again raises one recovery', () => {
