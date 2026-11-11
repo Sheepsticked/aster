@@ -1,6 +1,6 @@
 // @ts-check
-// Opt-in Telegram alerts: a modem `absent` or `no-network` for a while, or AMI down for a while, raises one alert and later
-// one recovery. Active alerts are stored with their notifications so a restart neither repeats nor forgets them.
+// Opt-in Telegram alerts: a modem in a problem state (ALERT_STATES) for a while, or AMI down for a while, raises one alert and
+// later one recovery. Active alerts are stored with their notifications so a restart neither repeats nor forgets them.
 import { hostname } from 'node:os';
 import { enqueue } from './queue.js';
 import { amiAlertText, amiRecoveredText, modemAlertText, modemRecoveredText } from './texts.js';
@@ -13,7 +13,7 @@ import { amiAlertText, amiRecoveredText, modemAlertText, modemRecoveredText } fr
 /**
  * @typedef {object} Timing
  * @property {number} checkMs  period of the check (5 s)
- * @property {number} modemMs  how long a modem is absent or without network before it alerts (5 min)
+ * @property {number} modemMs  how long a modem is in a problem state before it alerts (5 min)
  * @property {number} amiMs    how long AMI is not up before it alerts (2 min)
  */
 /**
@@ -32,7 +32,7 @@ import { amiAlertText, amiRecoveredText, modemAlertText, modemRecoveredText } fr
 
 export const DEFAULTS = Object.freeze({ checkMs: 5_000, modemMs: 5 * 60_000, amiMs: 2 * 60_000 });
 /** Modem UI states that alert once they last modemMs. */
-export const ALERT_STATES = Object.freeze(/** @type {const} */ (['absent', 'no-network']));
+export const ALERT_STATES = Object.freeze(/** @type {const} */ (['absent', 'no-network', 'flapping', 'stopped', 'connecting']));
 export const SETTINGS_KEY = 'alerts_active';
 
 /** @type {Logger} */

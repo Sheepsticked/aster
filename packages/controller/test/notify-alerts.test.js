@@ -64,7 +64,7 @@ function setup({ db, ami = { connected: true }, registry = registryWith(), clock
 
 describe('notify alerts', () => {
   test('a modem absent for 5 min raises one alert to its recipients; back to ready raises one recovery', () => {
-    assert.deepEqual([...ALERT_STATES], ['absent', 'no-network']);
+    assert.deepEqual([...ALERT_STATES], ['absent', 'no-network', 'flapping', 'stopped', 'connecting']);
     assert.deepEqual({ ...DEFAULTS }, { checkMs: 5000, modemMs: 300_000, amiMs: 120_000 });
     const { alerts, publish, notifications, stored, clock } = setup();
     alerts.start();
@@ -80,8 +80,10 @@ describe('notify alerts', () => {
     clock.now = T0 + 30 * MIN;
     assert.deepEqual(alerts.check().alerts, [], 'one alert per problem');
     publish('gsm1', 'connecting');
+    assert.deepEqual(alerts.check().recoveries, [], 'connecting is the same outage, not a recovery');
+    publish('gsm1', 'busy');
     assert.deepEqual(alerts.check().recoveries, ['gsm1']);
-    assert.deepEqual(notifications().at(-1), ['111', '[aster-test] Recovered: modem gsm1 is connecting (absent since 2026-09-11 09:01:00 +00:00)']);
+    assert.deepEqual(notifications().at(-1), ['111', '[aster-test] Recovered: modem gsm1 is busy (absent since 2026-09-11 09:01:00 +00:00)']);
     assert.deepEqual(stored(), { ami: null, modems: {} });
     alerts.check();
     assert.equal(notifications().length, 2);
@@ -112,6 +114,73 @@ describe('notify alerts', () => {
     clock.now += 10 * MIN;
     alerts.check();
     assert.equal(notifications().length, 2);
+  });
+
+  /** @type {Array<[string, string, string]>} state, how an alert names it, how a recovery names it */
+  const NEW_STATES = [
+    ['flapping', 'keeps restarting', 'restarting'],
+    ['stopped', 'is stopped by the driver', 'stopped'],
+    ['connecting', 'cannot connect', 'not connecting'],
+  ];
+  for (const [state, now, past] of NEW_STATES) {
+    test(`a modem ${state} for 5 min raises one alert and one recovery`, () => {
+      const { alerts, publish, notifications, stored, clock } = setup();
+      alerts.start();
+      publish('gsm1', 'ready');
+      clock.now = T0 + MIN;
+      publish('gsm1', state);
+      clock.now = T0 + 6 * MIN - 1;
+      assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
+      clock.now = T0 + 6 * MIN;
+      assert.deepEqual(alerts.check().alerts, ['gsm1']);
+      assert.deepEqual(notifications(), [['111', `[aster-test] Alert: modem gsm1 ${now} since 2026-09-11 09:01:00 +00:00`]]);
+      assert.deepEqual(stored(), { ami: null, modems: { gsm1: { state, since: T0 + MIN } } });
+      clock.now = T0 + 30 * MIN;
+      assert.deepEqual(alerts.check().alerts, [], 'one alert per problem');
+      publish('gsm1', 'ready');
+      assert.deepEqual(alerts.check().recoveries, ['gsm1']);
+      assert.deepEqual(notifications().at(-1), ['111', `[aster-test] Recovered: modem gsm1 is ready (${past} since 2026-09-11 09:01:00 +00:00)`]);
+      assert.deepEqual(stored(), { ami: null, modems: {} });
+      assert.equal(notifications().length, 2);
+    });
+  }
+
+  test('one outage that moves between problem states alerts once from its first start; connecting for less than 5 min sends nothing', () => {
+    const { alerts, publish, notifications, clock } = setup();
+    alerts.start();
+    publish('gsm1', 'absent');
+    clock.now = T0 + 2 * MIN;
+    publish('gsm1', 'connecting');
+    clock.now = T0 + 4 * MIN;
+    publish('gsm1', 'flapping');
+    clock.now = T0 + 5 * MIN;
+    assert.deepEqual(alerts.check().alerts, ['gsm1']);
+    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 keeps restarting since 2026-09-11 09:00:00 +00:00']]);
+    publish('gsm1', 'ready');
+    assert.deepEqual(alerts.check().recoveries, ['gsm1']);
+    assert.deepEqual(notifications().at(-1), ['111', '[aster-test] Recovered: modem gsm1 is ready (restarting since 2026-09-11 09:00:00 +00:00)']);
+
+    clock.now = T0 + 20 * MIN;
+    publish('gsm2', 'connecting');
+    clock.now += 5 * MIN - 1;
+    assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
+    publish('gsm2', 'ready');
+    clock.now += 30 * MIN;
+    assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
+    assert.equal(notifications().length, 2);
+  });
+
+  test('disabled and the configuration states never alert', () => {
+    const { alerts, publish, notifications, stored, clock } = setup();
+    alerts.start();
+    for (const state of ['disabled', 'duplicate-imei', 'unmapped', 'unverified']) {
+      publish('gsm1', state);
+      clock.now += 30 * MIN;
+      assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null }, state);
+    }
+    assert.equal(notifications().length, 0);
+    assert.equal(stored(), null);
+    assert.equal([...ALERT_STATES].includes(/** @type {any} */ ('disabled')), false);
   });
 
   test('AMI not up for 2 min raises one alert to the default recipients; up again raises one recovery', () => {

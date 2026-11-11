@@ -55,7 +55,13 @@ export const missedCallText = ({ host, modem, caller, at, timeZone, reason }) =>
 export const testText = ({ host, at, timeZone }) => fromHost(host, `Aster test notification [${formatTime(at, timeZone)}]`);
 
 /** How an alert names the modem states that raise it (alerts.js ALERT_STATES). */
-const MODEM_PROBLEM = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({ absent: 'is absent', 'no-network': 'has no GSM network' }));
+const MODEM_PROBLEM = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
+  absent: 'is absent',
+  'no-network': 'has no GSM network',
+  flapping: 'keeps restarting',
+  stopped: 'is stopped by the driver',
+  connecting: 'cannot connect',
+}));
 
 /**
  * @param {{ host: string, modem: string, state: string, since: number, timeZone: string }} alert
@@ -65,7 +71,13 @@ export const modemAlertText = ({ host, modem, state, since, timeZone }) =>
   fromHost(host, `Alert: modem ${modem} ${MODEM_PROBLEM[state] ?? `is ${state}`} since ${formatTime(since, timeZone)}`);
 
 /** The same states in a recovery text. */
-const MODEM_PROBLEM_PAST = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({ absent: 'absent', 'no-network': 'without GSM network' }));
+const MODEM_PROBLEM_PAST = Object.freeze(/** @type {Readonly<Record<string, string>>} */ ({
+  absent: 'absent',
+  'no-network': 'without GSM network',
+  flapping: 'restarting',
+  stopped: 'stopped',
+  connecting: 'not connecting',
+}));
 
 /**
  * @param {{ host: string, modem: string, state: string, alertState: string, since: number, timeZone: string }} recovery
