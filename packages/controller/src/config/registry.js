@@ -37,7 +37,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
  * @typedef {object} Registry
  * @property {1} version
  * @property {{ ui_language: 'ru' | 'en', timezone: string, retention_days: { operations: number, notifications: number, messages: number, calls: number } }} settings
- * @property {{ default_recipients: readonly string[], alerts: boolean }} telegram
+ * @property {{ default_recipients: readonly string[], alerts: boolean, alert_recipients: readonly string[] }} telegram
  * @property {readonly Modem[]} modems
  * @property {readonly Phone[]} phones
  */
@@ -47,7 +47,7 @@ const KEYS = {
   top: ['version', 'settings', 'telegram', 'modems', 'phones'],
   settings: ['ui_language', 'timezone', 'retention_days'],
   retention: ['operations', 'notifications', 'messages', 'calls'],
-  telegram: ['default_recipients', 'alerts'],
+  telegram: ['default_recipients', 'alerts', 'alert_recipients'],
   modem: ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports'],
   ports: ['data', 'audio'],
   phone: ['number', 'label', 'secret', 'outbound', 'context', 'direct_media'],
@@ -62,7 +62,7 @@ const DROPPED = { modem: ['label'] };
  */
 export const DEFAULTS = deepFreeze({
   settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
-  telegram: { default_recipients: [], alerts: false },
+  telegram: { default_recipients: [], alerts: false, alert_recipients: [] },
   modem: { phone_number: null, uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, ports: null },
   phone: { label: null, outbound: null, context: null, direct_media: false },
 });
@@ -448,6 +448,9 @@ function normalize(c, input) {
       telegram.default_recipients = c.list(rawTelegram.default_recipients, 'telegram.default_recipients', matching(CHAT_ID), MESSAGE.chatId);
     }
     telegram.alerts = c.field(rawTelegram, 'alerts', 'telegram', telegram.alerts, isBoolean, MESSAGE.bool);
+    if (Object.hasOwn(rawTelegram, 'alert_recipients')) {
+      telegram.alert_recipients = c.list(rawTelegram.alert_recipients, 'telegram.alert_recipients', matching(CHAT_ID), MESSAGE.chatId);
+    }
   }
 
   // Ring members are checked against the phone numbers as written, so modem problems stay in document order.
@@ -597,6 +600,7 @@ function render(registry) {
   };
   flow(['settings', 'retention_days']);
   flow(['telegram', 'default_recipients']);
+  flow(['telegram', 'alert_recipients']);
   for (const index of registry.modems.keys()) {
     for (const key of ['ring', 'recipients', 'ports']) flow(['modems', index, key]);
   }

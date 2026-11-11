@@ -26,6 +26,7 @@ export const update = ({
       },
       default_recipients: { type: 'array', maxItems: 32, items: CHAT_ID },
       alerts: { type: 'boolean' },
+      alert_recipients: { type: 'array', maxItems: 32, items: CHAT_ID },
       // null clears the token; the format is checked against notify/telegram.js isToken before anything is written.
       telegram_token: { type: ['string', 'null'], maxLength: 256 },
       password: {

@@ -25,14 +25,14 @@ after(() => {
 });
 
 /**
- * @param {{ alerts?: boolean, modems?: Array<Record<string, unknown>> }} [options]
+ * @param {{ alerts?: boolean, alertRecipients?: string[], modems?: Array<Record<string, unknown>> }} [options]
  * @returns {Registry}
  */
-function registryWith({ alerts = true, modems } = {}) {
+function registryWith({ alerts = true, alertRecipients, modems } = {}) {
   return validate({
     version: 1,
     settings: { timezone: 'UTC' },
-    telegram: { default_recipients: ['111222333'], alerts },
+    telegram: { default_recipients: ['111222333'], alerts, ...(alertRecipients ? { alert_recipients: alertRecipients } : {}) },
     modems: modems ?? [
       { id: 'gsm1', driver: 'quectel', imei: '490154203237534', enabled: true, recipients: ['111'] },
       { id: 'gsm2', driver: 'dongle', imei: '490154203237542', enabled: true },
@@ -181,6 +181,43 @@ describe('notify alerts', () => {
     assert.equal(notifications().length, 0);
     assert.equal(stored(), null);
     assert.equal([...ALERT_STATES].includes(/** @type {any} */ ('disabled')), false);
+  });
+
+  test('alert recipients get every modem and Asterisk alert and recovery instead of the modem or default recipients', () => {
+    const ami = { connected: false };
+    const registry = registryWith({ alertRecipients: ['900', '901'] });
+    const { alerts, publish, notifications, clock } = setup({ ami, registry });
+    alerts.start();
+    publish('gsm1', 'stopped');
+    publish('gsm2', 'flapping');
+    clock.now = T0 + 5 * MIN;
+    assert.deepEqual(alerts.check().alerts.sort(), ['ami', 'gsm1', 'gsm2']);
+    ami.connected = true;
+    publish('gsm1', 'ready');
+    publish('gsm2', 'ready');
+    assert.deepEqual(alerts.check().recoveries.sort(), ['ami', 'gsm1', 'gsm2']);
+    const sent = notifications();
+    assert.equal(sent.length, 12, 'six messages, each to both recipients');
+    assert.deepEqual([...new Set(sent.map(([chat]) => chat))].sort(), ['900', '901']);
+    assert.equal(sent.filter(([, text]) => String(text).includes('Alert: ')).length, 6);
+    assert.equal(sent.filter(([, text]) => String(text).includes('Recovered: ')).length, 6);
+  });
+
+  test('an empty alert recipients list keeps the modem and default routing; a list set later applies from the next message', () => {
+    const ami = { connected: false };
+    const { alerts, publish, notifications, clock, state } = setup({ ami, registry: registryWith({ alertRecipients: [] }) });
+    alerts.start();
+    publish('gsm1', 'stopped');
+    publish('gsm2', 'connecting');
+    clock.now = T0 + 5 * MIN;
+    alerts.check();
+    assert.deepEqual(notifications().map(([chat]) => chat).sort(), ['111', '111222333', '111222333']);
+    state.registry = registryWith({ alertRecipients: ['900'] });
+    ami.connected = true;
+    publish('gsm1', 'ready');
+    publish('gsm2', 'ready');
+    alerts.check();
+    assert.deepEqual(notifications().slice(3).map(([chat]) => chat), ['900', '900', '900']);
   });
 
   test('AMI not up for 2 min raises one alert to the default recipients; up again raises one recovery', () => {

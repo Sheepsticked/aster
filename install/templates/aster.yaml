@@ -8,6 +8,7 @@ settings:
 telegram:
   default_recipients: []       # Telegram chat ids as strings, e.g. ["111222333"]; the bot token lives in secrets.env
   alerts: false                # opt-in: modem down > 5 min / Asterisk unreachable > 2 min
+  alert_recipients: []         # chat ids that get only the alerts; empty: the modem's or the default recipients
 modems: []
   # - id: gsm1                 # ^[a-z][a-z0-9_]{0,15}$; becomes the driver device name and ${GSM1}
   #   driver: quectel          # quectel | dongle

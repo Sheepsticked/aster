@@ -39,6 +39,7 @@ export const settings = () => ({
   retention_days: { operations: 30, notifications: 45, messages: 180, calls: 365 },
   default_recipients: ['123456789'],
   alerts: true,
+  alert_recipients: [],
   telegram_token_set: true,
   password_set: true,
   registry: { present: true, hash: 'b4d6f1a2c3e4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0' },

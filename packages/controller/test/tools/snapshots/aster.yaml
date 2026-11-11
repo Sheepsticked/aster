@@ -8,6 +8,7 @@ settings:
 telegram:
   default_recipients: [ "111222333" ]
   alerts: false
+  alert_recipients: []
 modems:
   - id: "gsm1"
     driver: "quectel"

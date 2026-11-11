@@ -984,16 +984,38 @@ test.describe('the settings page', () => {
   test('refuses a recipient the registry would refuse, and one that is already in the list', async ({ page }) => {
     const notifications = await openSection(page, 'settings-notifications');
     const field = notifications.getByLabel(ru['settings.recipients']);
+    const add = page.locator('div:has(> #settings-recipients)').getByRole('button', { name: ru['list.add'] });
     await field.fill('not-a-chat-id');
-    await notifications.getByRole('button', { name: ru['list.add'] }).click();
+    await add.click();
     await expect(notifications.getByRole('alert')).toHaveText(ru['list.invalid']);
     // The fixture already has this one; adding it twice would send a list the registry refuses.
     await field.fill('123456789');
-    await notifications.getByRole('button', { name: ru['list.add'] }).click();
+    await add.click();
     await expect(notifications.getByRole('alert')).toHaveText(ru['list.duplicate']);
     await field.fill('987654321');
-    await notifications.getByRole('button', { name: ru['list.add'] }).click();
+    await add.click();
     await expect(notifications.getByRole('button', { name: ru['list.remove'].replace('{item}', '987654321') })).toBeVisible();
+  });
+
+  test('keeps the alert recipients apart from the default recipients and saves them', async ({ page }) => {
+    const notifications = await openSection(page, 'settings-notifications');
+    const field = notifications.getByLabel(ru['settings.alert_recipients']);
+    const add = page.locator('div:has(> #settings-alert-recipients)').getByRole('button', { name: ru['list.add'] });
+    await expect(notifications.getByText(ru['settings.alert_recipients_hint'])).toBeVisible();
+    await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
+    // An id that is a default recipient is no duplicate here: the two lists are separate.
+    await field.fill('123456789');
+    await add.click();
+    await expect(notifications.getByRole('alert')).toHaveCount(0);
+    await field.fill('not-a-chat-id');
+    await add.click();
+    await expect(notifications.getByRole('alert')).toHaveText(ru['list.invalid']);
+    await page.getByRole('button', { name: ru['common.save'], exact: true }).click();
+    await expect(page.getByText(ru['settings.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
+    // Both lists now show the id, one chip each (the saved form is a fresh one, so a phone has the section folded again).
+    const saved = await openSection(page, 'settings-notifications');
+    await expect(saved.getByRole('button', { name: ru['list.remove'].replace('{item}', '123456789') })).toHaveCount(2);
   });
 
   test('checks the new password against itself before it sends anything', async ({ page }) => {

@@ -111,6 +111,10 @@ export function createAlerts({ db, bus, ami, registry, log = SILENT, now = Date.
     const enabled = reg.telegram.alerts;
     const timeZone = reg.settings.timezone;
     const name = host();
+    // Alert recipients, when set, get every alert and recovery instead of the recipients the notification would have.
+    const alertIds = reg.telegram.alert_recipients;
+    /** @param {readonly string[]} own */
+    const routed = (own) => (alertIds.length > 0 ? alertIds : own);
     /** @type {Array<{ chatIds: readonly string[], text: string }>} */
     const messages = [];
     /** @type {Active} */
@@ -120,14 +124,14 @@ export function createAlerts({ db, bus, ami, registry, log = SILENT, now = Date.
       if (ami.connected) {
         amiDownSince = null;
         if (next.ami) {
-          if (enabled) messages.push({ chatIds: reg.telegram.default_recipients, text: amiRecoveredText({ host: name, since: next.ami.since, timeZone }) });
+          if (enabled) messages.push({ chatIds: routed(reg.telegram.default_recipients), text: amiRecoveredText({ host: name, since: next.ami.since, timeZone }) });
           result.recoveries.push('ami');
           next.ami = null;
         }
       } else {
         amiDownSince ??= at;
         if (!next.ami && enabled && at - amiDownSince >= t.amiMs) {
-          messages.push({ chatIds: reg.telegram.default_recipients, text: amiAlertText({ host: name, since: amiDownSince, timeZone }) });
+          messages.push({ chatIds: routed(reg.telegram.default_recipients), text: amiAlertText({ host: name, since: amiDownSince, timeZone }) });
           result.alerts.push('ami');
           next.ami = { since: amiDownSince };
         }
@@ -141,7 +145,7 @@ export function createAlerts({ db, bus, ami, registry, log = SILENT, now = Date.
       const entry = tracked.get(modem.id);
       if (!entry) continue;
       const alerted = next.modems[modem.id];
-      const chatIds = modem.recipients ?? reg.telegram.default_recipients;
+      const chatIds = routed(modem.recipients ?? reg.telegram.default_recipients);
       if (PROBLEM.has(entry.state)) {
         if (!alerted && enabled && entry.since !== null && at - entry.since >= t.modemMs) {
           messages.push({ chatIds, text: modemAlertText({ host: name, modem: modem.id, state: entry.state, since: entry.since, timeZone }) });

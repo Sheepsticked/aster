@@ -543,6 +543,7 @@ function settingsPut(body) {
     if (fields[key] !== undefined) next[key] = fields[key];
   }
   if (fields.default_recipients !== undefined) next.default_recipients = [...fields.default_recipients];
+  if (fields.alert_recipients !== undefined) next.alert_recipients = [...fields.alert_recipients];
   if (fields.retention_days !== undefined) next.retention_days = { ...next.retention_days, ...fields.retention_days };
   state.settings = next;
   const operation = applied();

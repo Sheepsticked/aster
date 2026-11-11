@@ -19,7 +19,7 @@
   /** A Telegram chat id: digits, and a leading `-` for a group. */
   const CHAT_ID = /^-?[0-9]{1,20}$/;
   /** The registry fields this page shows problems beside. */
-  const FIELDS = Object.freeze(['ui_language', 'timezone', 'operations', 'notifications', 'default_recipients', 'alerts']);
+  const FIELDS = Object.freeze(['ui_language', 'timezone', 'operations', 'notifications', 'default_recipients', 'alerts', 'alert_recipients']);
 
   /** @type {any} */
   let settings = $state(null);
@@ -64,6 +64,7 @@
     notifications: String(data.retention_days?.notifications ?? ''),
     default_recipients: [...(data.default_recipients ?? [])],
     alerts: Boolean(data.alerts),
+    alert_recipients: [...(data.alert_recipients ?? [])],
   });
 
   async function load() {
@@ -99,6 +100,7 @@
     if (Object.keys(retention).length > 0) out.retention_days = retention;
     if (form.default_recipients.join(',') !== (settings.default_recipients ?? []).join(',')) out.default_recipients = [...form.default_recipients];
     if (form.alerts !== Boolean(settings.alerts)) out.alerts = form.alerts;
+    if (form.alert_recipients.join(',') !== (settings.alert_recipients ?? []).join(',')) out.alert_recipients = [...form.alert_recipients];
     return out;
   });
 
@@ -278,6 +280,20 @@
             <span>{t('settings.alerts')}</span>
           </label>
           <p class="-mt-3 text-sm text-slate-500">{t('settings.alerts_hint')}</p>
+
+          <Field id="settings-alert-recipients" label={t('settings.alert_recipients')} hint={t('settings.alert_recipients_hint')} problems={problemsFor(problems, 'alert_recipients')}>
+            {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+              <ChipList
+                id="settings-alert-recipients"
+                items={form.alert_recipients}
+                pattern={CHAT_ID}
+                inputmode="numeric"
+                placeholder={t('settings.chat_id')}
+                describedBy={field.describedBy}
+                onchange={(items) => (form.alert_recipients = items)}
+              />
+            {/snippet}
+          </Field>
         </div>
       </Section>
 
