@@ -1,6 +1,7 @@
 <!-- Settings page, saved separately: registry fields (one apply), the Telegram token (write-only secret), the admin
      password (ends all sessions) and the backup download link. The test message's result arrives via the event stream. -->
 <script>
+  import { tick } from 'svelte';
   import { api } from '../api.js';
   import { LANGUAGES, language, setLanguage, t } from '../i18n/index.js';
   import ChipList from '../lib/ChipList.svelte';
@@ -18,6 +19,10 @@
 
   /** A Telegram chat id: digits, and a leading `-` for a group. */
   const CHAT_ID = /^-?[0-9]{1,20}$/;
+  /** The most sender rules the controller takes. */
+  const MAX_ROUTES = 64;
+  /** The problems of a sender rule that are shown beside its fields. */
+  const ROUTE_FIELD = /^telegram\.sender_routes\[\d+\]\.(?:sender|recipients)/;
   /** The registry fields this page shows problems beside. */
   const FIELDS = Object.freeze(['ui_language', 'timezone', 'operations', 'notifications', 'default_recipients', 'alerts', 'alert_recipients']);
 
@@ -54,6 +59,14 @@
   /** IANA zones known to the browser; free text if unsupported. */
   const zones = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
 
+  /** Gives each rule row a key of its own, so removing one does not hand its half-typed chat id to the next. */
+  let routeKey = 0;
+  /** @param {any} data  what GET /api/settings answers */
+  const editableRoutes = (data) => (data.sender_routes ?? []).map((/** @type {any} */ route) => ({ key: routeKey++, sender: route.sender, recipients: [...route.recipients] }));
+  /** A rule row with nothing typed in it yet is not a rule. */
+  const filled = (/** @type {any} */ row) => row.sender.trim() !== '' || row.recipients.length > 0;
+  const routesOf = (/** @type {any[]} */ rows) => rows.filter(filled).map((row) => ({ sender: row.sender.trim(), recipients: [...row.recipients] }));
+
   /** @param {any} data  what GET /api/settings answers */
   const editable = (data) => ({
     ui_language: data.ui_language,
@@ -65,6 +78,7 @@
     default_recipients: [...(data.default_recipients ?? [])],
     alerts: Boolean(data.alerts),
     alert_recipients: [...(data.alert_recipients ?? [])],
+    sender_routes: editableRoutes(data),
   });
 
   async function load() {
@@ -101,6 +115,8 @@
     if (form.default_recipients.join(',') !== (settings.default_recipients ?? []).join(',')) out.default_recipients = [...form.default_recipients];
     if (form.alerts !== Boolean(settings.alerts)) out.alerts = form.alerts;
     if (form.alert_recipients.join(',') !== (settings.alert_recipients ?? []).join(',')) out.alert_recipients = [...form.alert_recipients];
+    const routes = routesOf(form.sender_routes);
+    if (JSON.stringify(routes) !== JSON.stringify(settings.sender_routes ?? [])) out.sender_routes = routes;
     return out;
   });
 
@@ -115,12 +131,29 @@
       const value = Number(form[key]);
       if (!Number.isInteger(value) || value < 1 || value > 3650) found.push({ path: key, message: t('settings.retention_invalid') });
     }
+    for (const [index, row] of form.sender_routes.entries()) {
+      if (row.sender.trim() === '') found.push({ path: `telegram.sender_routes[${index}].sender`, message: t('settings.route_sender_empty') });
+      if (row.recipients.length === 0) found.push({ path: `telegram.sender_routes[${index}].recipients`, message: t('settings.route_chats_empty') });
+    }
     return found;
+  }
+
+  /** The problems found for one field of one rule, by the row's position in the list that is sent. */
+  const routeProblems = (/** @type {number} */ index, /** @type {'sender' | 'recipients'} */ field) =>
+    problems.filter((problem) => problem.path.startsWith(`telegram.sender_routes[${index}].${field}`));
+
+  async function addRoute() {
+    const key = routeKey++;
+    form.sender_routes = [...form.sender_routes, { key, sender: '', recipients: [] }];
+    await tick();
+    document.getElementById(`settings-route-${key}-sender`)?.focus();
   }
 
   async function save(/** @type {SubmitEvent} */ event) {
     event.preventDefault();
     if (saving || !dirty) return;
+    // A rule row nobody filled in is dropped, so the rows are the rules that are sent.
+    form.sender_routes = form.sender_routes.filter(filled);
     problems = check();
     refused = null;
     if (problems.length > 0) return;
@@ -220,7 +253,7 @@
       {#if refused !== null}
         <p class="card border-rose-200 bg-rose-50 p-4 text-rose-900" role="alert">{refused}</p>
       {/if}
-      {#each problemsElsewhere(problems, FIELDS) as problem (problem.path + problem.message)}
+      {#each problemsElsewhere(problems, FIELDS).filter((problem) => !ROUTE_FIELD.test(problem.path)) as problem (problem.path + problem.message)}
         <p class="card border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">{problem.path}: {problem.message}</p>
       {/each}
 
@@ -294,6 +327,59 @@
               />
             {/snippet}
           </Field>
+        </div>
+      </Section>
+
+      <Section id="settings-routes" title={t('settings.routes')} subtitle={t('settings.routes_hint')}>
+        <div class="flex flex-col gap-3">
+          {#if form.sender_routes.length === 0}
+            <p class="text-sm text-slate-500">{t('settings.routes_none')}</p>
+          {/if}
+          {#each form.sender_routes as row, index (row.key)}
+            <div role="group" aria-label={t('settings.route_title', { n: index + 1 })} class="flex flex-col gap-3 rounded-lg border border-slate-200 p-3">
+              <div class="flex items-center justify-between gap-2">
+                <span class="font-medium">{t('settings.route_title', { n: index + 1 })}</span>
+                <button
+                  type="button"
+                  class="btn btn-danger px-3 text-sm"
+                  aria-label={t('settings.route_remove_label', { n: index + 1 })}
+                  onclick={() => (form.sender_routes = form.sender_routes.filter((other) => other !== row))}
+                >
+                  {t('settings.route_remove')}
+                </button>
+              </div>
+              <Field id="settings-route-{row.key}-sender" label={t('settings.route_sender')} problems={routeProblems(index, 'sender')}>
+                {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+                  <input
+                    id="settings-route-{row.key}-sender"
+                    class="input"
+                    bind:value={row.sender}
+                    maxlength="32"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder={t('settings.route_sender_placeholder')}
+                    aria-describedby={field.describedBy}
+                  />
+                {/snippet}
+              </Field>
+              <Field id="settings-route-{row.key}-chats" label={t('settings.route_chats')} problems={routeProblems(index, 'recipients')}>
+                {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+                  <ChipList
+                    id="settings-route-{row.key}-chats"
+                    items={row.recipients}
+                    pattern={CHAT_ID}
+                    inputmode="numeric"
+                    placeholder={t('settings.chat_id')}
+                    describedBy={field.describedBy}
+                    onchange={(items) => (row.recipients = items)}
+                  />
+                {/snippet}
+              </Field>
+            </div>
+          {/each}
+          <button type="button" class="btn btn-plain w-full sm:w-auto sm:self-start" disabled={form.sender_routes.length >= MAX_ROUTES} onclick={addRoute}>
+            {t('settings.route_add')}
+          </button>
         </div>
       </Section>
 

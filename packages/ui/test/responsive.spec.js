@@ -1018,6 +1018,57 @@ test.describe('the settings page', () => {
     await expect(saved.getByRole('button', { name: ru['list.remove'].replace('{item}', '123456789') })).toHaveCount(2);
   });
 
+  test('adds, removes and saves sender rules, and refuses a rule that is not finished', async ({ page }, info) => {
+    const routes = await openSection(page, 'settings-routes');
+    await expect(routes.getByText(ru['settings.routes_hint'])).toBeVisible();
+    const rule = (/** @type {number} */ n) => routes.getByRole('group', { name: ru['settings.route_title'].replace('{n}', String(n)) });
+    // The fixture has one rule: INFO with two chats.
+    await expect(rule(1).getByLabel(ru['settings.route_sender'])).toHaveValue('INFO');
+    await expect(rule(1).getByRole('button', { name: ru['list.remove'].replace('{item}', '-1001234567890') })).toBeVisible();
+    await noSidewaysScroll(page);
+    await page.screenshot({ path: `test-results/screens/${info.project.name}-settings-routes.png`, fullPage: true });
+
+    // A new rule takes the focus; one without a chat id is refused before anything is sent.
+    await routes.getByRole('button', { name: ru['settings.route_add'] }).click();
+    await expect(rule(2).getByLabel(ru['settings.route_sender'])).toBeFocused();
+    await rule(2).getByLabel(ru['settings.route_sender']).fill(' +1 234-567-890 ');
+    await page.getByRole('button', { name: ru['common.save'], exact: true }).click();
+    await expect(rule(2).getByText(ru['settings.route_chats_empty'])).toBeVisible();
+    await expect(page.getByText(ru['settings.saved'])).toHaveCount(0);
+    // A chat id the registry would refuse is stopped in the list; a good one is kept.
+    const chats = rule(2).getByLabel(ru['settings.route_chats']);
+    await chats.fill('not-a-chat-id');
+    await rule(2).getByRole('button', { name: ru['list.add'] }).click();
+    await expect(rule(2).getByRole('alert')).toHaveText(ru['list.invalid']);
+    await chats.fill('555');
+    await rule(2).getByRole('button', { name: ru['list.add'] }).click();
+    await expect(rule(2).getByRole('button', { name: ru['list.remove'].replace('{item}', '555') })).toBeVisible();
+    // INFO goes away; the rest is renumbered, and a blank rule added last is not a rule.
+    await rule(1).getByRole('button', { name: ru['settings.route_remove_label'].replace('{n}', '1') }).click();
+    await expect(rule(2)).toHaveCount(0);
+    await expect(rule(1).getByLabel(ru['settings.route_sender'])).toHaveValue(' +1 234-567-890 ');
+    await routes.getByRole('button', { name: ru['settings.route_add'] }).click();
+    await expect(rule(2)).toBeVisible();
+    await noSidewaysScroll(page);
+    await page.getByRole('button', { name: ru['common.save'], exact: true }).click();
+    await expect(page.getByText(ru['settings.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
+
+    // The saved form is a fresh one: one rule, its sender trimmed, its chat id kept.
+    const saved = await openSection(page, 'settings-routes');
+    await expect(saved.getByRole('group')).toHaveCount(1);
+    await expect(saved.getByRole('group').getByLabel(ru['settings.route_sender'])).toHaveValue('+1 234-567-890');
+    await expect(saved.getByRole('button', { name: ru['list.remove'].replace('{item}', '555') })).toBeVisible();
+
+    // Removing the last rule saves an empty list.
+    await saved.getByRole('button', { name: ru['settings.route_remove_label'].replace('{n}', '1') }).click();
+    await expect(saved.getByText(ru['settings.routes_none'])).toBeVisible();
+    await page.getByRole('button', { name: ru['common.save'], exact: true }).click();
+    await expect(page.getByText(ru['settings.saved'])).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: ru['common.saved'] })).toBeDisabled();
+    await expect((await openSection(page, 'settings-routes')).getByText(ru['settings.routes_none'])).toBeVisible();
+  });
+
   test('checks the new password against itself before it sends anything', async ({ page }) => {
     const password = await openSection(page, 'settings-password');
     await password.getByLabel(ru['settings.password_current']).fill('a-long-enough-password');

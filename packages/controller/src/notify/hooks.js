@@ -4,6 +4,7 @@
 import { hostname } from 'node:os';
 import { missedReason, outcome } from '../calls/outcome.js';
 import { enqueue } from './queue.js';
+import { withSenderRoutes } from './sender-routes.js';
 import { missedCallText, smsText } from './texts.js';
 
 /** @typedef {import('../bus.js').Bus} Bus */
@@ -53,13 +54,16 @@ export function createIngestHooks({ registry, bus = null, log = SILENT, now = Da
       if (event.kind === 'call-end' && outcome(event.data) !== 'missed') return;
       const reg = current();
       const modem = reg.modems.find((entry) => entry.id === event.modem) ?? null;
-      const chatIds = modem?.recipients ?? reg.telegram.default_recipients;
-      if (chatIds.length === 0) return;
+      const own = modem?.recipients ?? reg.telegram.default_recipients;
       if (event.kind === 'sms') {
         const { sender, scts, text } = event.data;
+        const chatIds = withSenderRoutes(reg.telegram.sender_routes, sender, own);
+        if (chatIds.length === 0) return;
         enqueue(db, { sourceKind: 'sms', sourceId: rowId, chatIds, text: smsText({ host: host(), modem: event.modem, sender, scts, text }), now: now() });
       } else {
         const { caller, dialstatus } = event.data;
+        const chatIds = withSenderRoutes(reg.telegram.sender_routes, caller, own);
+        if (chatIds.length === 0) return;
         const text = missedCallText({ host: host(), modem: event.modem, caller, at: event.emittedMs, timeZone: reg.settings.timezone, reason: missedReason(dialstatus) ?? dialstatus });
         enqueue(db, { sourceKind: 'call', sourceId: rowId, chatIds, text, now: now() });
       }
