@@ -49,7 +49,8 @@ jobs:
         run: bash test/install/fleet-update.test.sh
 
       - name: install.sh on a clean host
-        run: sudo -E install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning
+        # sudo drops the environment (sudo -E is ignored), so the installer gets its variables through env.
+        run: sudo env ASTER_ADMIN_PASSWORD="$ASTER_ADMIN_PASSWORD" HOME_DIR="$HOME_DIR" install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning
 
       - name: both containers are healthy and the API says ok
         run: |
@@ -103,7 +104,7 @@ jobs:
           set -euo pipefail
           before=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
           modes_before=$(sudo find "$HOME_DIR" -printf '%m %u:%g %P\n' | sort | md5sum)
-          output=$(sudo -E install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning)
+          output=$(sudo env ASTER_ADMIN_PASSWORD="$ASTER_ADMIN_PASSWORD" HOME_DIR="$HOME_DIR" install/install.sh --non-interactive --build --http-port "$PORT" --no-sd-tuning)
           echo "$output" | tail -20
           test "$(echo "$output" | tail -1)" = 'CHANGED=0'
           after=$(docker inspect -f '{{.Id}}' aster-asterisk aster-controller | tr '\n' ' ')
