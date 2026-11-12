@@ -22,7 +22,7 @@ const FREE_PORTS = readFileSync(new URL('./fixtures/discovery/quectel-free-ports
 
 /** @param {Partial<import('../src/config/registry.js').Modem>} fields */
 const modem = (fields) => /** @type {import('../src/config/registry.js').Modem} */ ({ id: 'ec25', driver: 'quectel', imei: '490154203237518', enabled: true, uac: true, usb_port: '1-2', ring: [], ring_timeout: 120,
-  incoming_context: null, group: null, recipients: null, ports: null, ...fields });
+  incoming_context: null, group: null, recipients: null, sender_routes: [], ports: null, ...fields });
 const quectelAt = (/** @type {string} */ port) => ({ port, vendor: '2c7c', product: '0125', driver: /** @type {'quectel'} */ ('quectel') });
 const dongleAt = (/** @type {string} */ port) => ({ port, vendor: '12d1', product: '1436', driver: /** @type {'dongle'} */ ('dongle') });
 

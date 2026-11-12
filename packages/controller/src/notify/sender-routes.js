@@ -1,5 +1,5 @@
 // @ts-check
-// Sender routes: extra Telegram chats for the SMS and missed calls of chosen senders (registry telegram.sender_routes).
+// Sender routes: extra Telegram chats for the SMS and missed calls of chosen senders on one modem (registry modems[].sender_routes).
 
 /** @typedef {import('../config/registry.js').SenderRoute} SenderRoute */
 

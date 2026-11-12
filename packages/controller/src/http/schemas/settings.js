@@ -3,8 +3,6 @@
 import { MAX_PASSWORD } from '../auth.js';
 
 const CHAT_ID = { type: 'string', pattern: '^-?[0-9]{1,20}$' };
-// Only the shape: the registry reports an empty sender, a bad chat id or an unknown key with the path of the entry.
-const SENDER_ROUTE = { type: 'object', properties: { sender: { type: 'string' }, recipients: { type: 'array', maxItems: 32 } } };
 
 /** PUT /api/settings — every field is optional, but the body must change something. */
 export const update = ({
@@ -29,7 +27,6 @@ export const update = ({
       default_recipients: { type: 'array', maxItems: 32, items: CHAT_ID },
       alerts: { type: 'boolean' },
       alert_recipients: { type: 'array', maxItems: 32, items: CHAT_ID },
-      sender_routes: { type: 'array', maxItems: 64, items: SENDER_ROUTE },
       // null clears the token; the format is checked against notify/telegram.js isToken before anything is written.
       telegram_token: { type: ['string', 'null'], maxLength: 256 },
       password: {

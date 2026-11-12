@@ -21,7 +21,6 @@ export const DEFAULTS = Object.freeze(/** @type {Readonly<{ applyWaitMs: number 
  * @property {string[]} [default_recipients]
  * @property {boolean} [alerts]
  * @property {string[]} [alert_recipients]
- * @property {Array<{ sender: string, recipients: string[] }>} [sender_routes]
  * @property {string | null} [telegram_token]
  * @property {{ current: string, next: string }} [password]
  * @property {boolean} [force]
@@ -40,7 +39,6 @@ function view({ registry, hash, present }, secrets) {
     default_recipients: [...registry.telegram.default_recipients],
     alerts: registry.telegram.alerts,
     alert_recipients: [...registry.telegram.alert_recipients],
-    sender_routes: registry.telegram.sender_routes.map((route) => ({ sender: route.sender, recipients: [...route.recipients] })),
     telegram_token_set: isToken(secrets[TOKEN_KEY]),
     password_set: typeof secrets[HASH_KEY] === 'string' && secrets[HASH_KEY] !== '',
     registry: { present, hash },
@@ -49,8 +47,7 @@ function view({ registry, hash, present }, secrets) {
 
 /** The fields a PUT can change, as they are compared to decide whether the registry has to be applied at all. */
 const fields = (/** @type {Registry} */ registry) => JSON.stringify([registry.settings.ui_language, registry.settings.timezone,
-  registry.settings.retention_days, registry.telegram.default_recipients, registry.telegram.alerts, registry.telegram.alert_recipients,
-  registry.telegram.sender_routes]);
+  registry.settings.retention_days, registry.telegram.default_recipients, registry.telegram.alerts, registry.telegram.alert_recipients]);
 
 /**
  * @param {import('fastify').FastifyInstance} app
@@ -94,7 +91,6 @@ export function settingsRoutes(app, ctx) {
     if (body.default_recipients !== undefined) telegram.default_recipients = [...body.default_recipients];
     if (body.alerts !== undefined) telegram.alerts = body.alerts;
     if (body.alert_recipients !== undefined) telegram.alert_recipients = [...body.alert_recipients];
-    if (body.sender_routes !== undefined) telegram.sender_routes = body.sender_routes;
     /** @type {Registry} */
     let next;
     try {
@@ -127,7 +123,7 @@ export function settingsRoutes(app, ctx) {
 
     /** @type {string[]} */
     const changed = [];
-    for (const key of /** @type {const} */ (['ui_language', 'timezone', 'retention_days', 'default_recipients', 'alerts', 'alert_recipients', 'sender_routes'])) {
+    for (const key of /** @type {const} */ (['ui_language', 'timezone', 'retention_days', 'default_recipients', 'alerts', 'alert_recipients'])) {
       if (body[key] !== undefined) changed.push(key);
     }
 

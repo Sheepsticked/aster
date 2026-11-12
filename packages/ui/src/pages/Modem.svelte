@@ -1,6 +1,7 @@
 <!-- Modem detail page in collapsible sections: registry fields (only changes are sent, one registry-apply), the phone number,
      device actions, VoLTE, and AT/USSD/forwarding operations. Forwarding shows only states the modem verified via a +CCFC query. -->
 <script>
+  import { tick } from 'svelte';
   import { api } from '../api.js';
   import { t } from '../i18n/index.js';
   import ActionIcon from '../lib/ActionIcon.svelte';
@@ -49,6 +50,12 @@
     start: 'btn-plain', stop: 'btn-danger', restart: 'btn-plain', reset: 'btn-plain', remap: 'btn-plain',
   }));
   const WHEN = Object.freeze(['gracefully', 'now', 'when convenient']);
+  /** A Telegram chat id: digits, and a leading `-` for a group. */
+  const CHAT_ID = /^-?[0-9]{1,20}$/;
+  /** The most sender rules the controller takes for one modem. */
+  const MAX_ROUTES = 64;
+  /** A problem of a sender rule, shown beside the rule rather than as a recipients or form problem. */
+  const ROUTE_PATH = /(?:^|\.)sender_routes\[\d+\]/;
   /** The form fields the page shows problems beside. */
   const FIELDS = Object.freeze(['imei', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'driver', 'uac', 'enabled']);
 
@@ -130,6 +137,12 @@
   const ussdSession = $derived(({ 1: t('ussd.waiting'), 2: t('ussd.closed_by_network'), 4: t('ussd.not_supported'),
     5: t('ussd.network_timeout') })[ussdResult?.type] ?? null);
 
+  /** Gives each rule row a key of its own, so removing one does not hand its half-typed chat id to the next. */
+  let routeKey = 0;
+  /** A rule row with nothing typed in it yet is not a rule. */
+  const filled = (/** @type {any} */ row) => row.sender.trim() !== '' || row.recipients.length > 0;
+  const routesOf = (/** @type {any[]} */ rows) => rows.filter(filled).map((row) => ({ sender: row.sender.trim(), recipients: [...row.recipients] }));
+
   /** @param {any} entry  a modem as `modemView` sends it */
   function editable(entry) {
     return {
@@ -144,6 +157,7 @@
       group: entry.group === null || entry.group === undefined ? '' : String(entry.group),
       ownRecipients: Array.isArray(entry.recipients),
       recipients: [...(entry.recipients ?? [])],
+      sender_routes: (entry.sender_routes ?? []).map((/** @type {any} */ route) => ({ key: routeKey++, sender: route.sender, recipients: [...route.recipients] })),
     };
   }
 
@@ -274,13 +288,16 @@
     const recipients = form.ownRecipients ? [...form.recipients] : null;
     const stored = modem.recipients === null ? null : [...modem.recipients];
     if (JSON.stringify(recipients) !== JSON.stringify(stored)) out.recipients = recipients;
+    const routes = routesOf(form.sender_routes);
+    if (JSON.stringify(routes) !== JSON.stringify(modem.sender_routes ?? [])) out.sender_routes = routes;
     return out;
   });
 
   const dirty = $derived(Object.keys(changes).length > 0);
-  /** Which block holds the pending edits: the Telegram recipients have a block of their own. */
+  /** Which block holds the pending edits: the Telegram recipients and the sender rules have blocks of their own. */
   const telegramDirty = $derived('recipients' in changes);
-  const settingsDirty = $derived(Object.keys(changes).some((key) => key !== 'recipients'));
+  const routesDirty = $derived('sender_routes' in changes);
+  const settingsDirty = $derived(Object.keys(changes).some((key) => key !== 'recipients' && key !== 'sender_routes'));
 
   /** Client-side checks for early feedback beside each field. */
   function check() {
@@ -292,12 +309,32 @@
     if (!Number.isInteger(timeout) || timeout < 1 || timeout > 3600) found.push({ path: 'ring_timeout', message: t('modem.ring_timeout_invalid') });
     if (form.group.trim() !== '' && !Number.isInteger(Number(form.group))) found.push({ path: 'group', message: t('modem.group_invalid') });
     if (form.uac && form.driver === 'dongle') found.push({ path: 'uac', message: t('modems.uac_quectel') });
+    for (const [index, row] of form.sender_routes.entries()) {
+      if (row.sender.trim() === '') found.push({ path: `sender_routes[${index}].sender`, message: t('modem.route_sender_empty') });
+      if (row.recipients.length === 0) found.push({ path: `sender_routes[${index}].recipients`, message: t('modem.route_chats_empty') });
+    }
     return found;
+  }
+
+  /** The problems of a page field, leaving out those of the sender rules (a rule has recipients too). */
+  const fieldProblems = (/** @type {string} */ field) => problemsFor(problems, field).filter((problem) => !ROUTE_PATH.test(problem.path));
+
+  /** The problems found for one field of one rule, by the row's position in the list that is sent. */
+  const routeProblems = (/** @type {number} */ index, /** @type {'sender' | 'recipients'} */ field) =>
+    problems.filter((problem) => new RegExp(`(?:^|\\.)sender_routes\\[${index}\\]\\.${field}(?:$|[.[])`).test(problem.path));
+
+  async function addRoute() {
+    const key = routeKey++;
+    form.sender_routes = [...form.sender_routes, { key, sender: '', recipients: [] }];
+    await tick();
+    document.getElementById(`modem-route-${key}-sender`)?.focus();
   }
 
   async function save(/** @type {SubmitEvent} */ event) {
     event.preventDefault();
     if (saving || !dirty) return;
+    // A rule row nobody filled in is dropped, so the rows are the rules that are sent.
+    form.sender_routes = form.sender_routes.filter(filled);
     problems = check();
     refused = null;
     if (problems.length > 0) return;
@@ -703,7 +740,7 @@
           {#if refused !== null}
             <p class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-900" role="alert">{refused}</p>
           {/if}
-          {#each problemsElsewhere(problems, FIELDS) as problem (problem.path + problem.message)}
+          {#each problemsElsewhere(problems, FIELDS).filter((problem) => !ROUTE_PATH.test(problem.path)) as problem (problem.path + problem.message)}
             <p class="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-900">{problem.path}: {problem.message}</p>
           {/each}
 
@@ -842,13 +879,79 @@
                 <p class="text-sm text-amber-800">{t('modem.telegram_nobody')}</p>
               {/if}
             {/if}
-            {#each problemsFor(problems, 'recipients') as problem (problem.message)}
+            {#each fieldProblems('recipients') as problem (problem.message)}
               <p class="text-sm text-rose-800">{problem.message}</p>
             {/each}
             <!-- The chip list's Add only changes the page; this is where the edit is written down. -->
             {#if telegramDirty}
               <div class="flex flex-col gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between" role="status">
                 <span>{t('modem.telegram_unsaved')}</span>
+                <button type="submit" form="modem-form" class="btn btn-primary w-full sm:w-auto" disabled={saving}>
+                  {saving ? t('common.saving') : t('common.save')}
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </Section>
+
+      <Section id="modem-routes" title={t('modem.routes')} subtitle={t('modem.routes_hint')}>
+        {#snippet aside()}
+          {#if routesDirty}{@render unsavedBadge()}{/if}
+        {/snippet}
+        {#if form !== null}
+          <div class="flex flex-col gap-3">
+            {#if form.sender_routes.length === 0}
+              <p class="text-sm text-slate-500">{t('modem.routes_none')}</p>
+            {/if}
+            {#each form.sender_routes as row, index (row.key)}
+              <div role="group" aria-label={t('modem.route_title', { n: index + 1 })} class="flex flex-col gap-3 rounded-lg border border-slate-200 p-3">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-medium">{t('modem.route_title', { n: index + 1 })}</span>
+                  <button
+                    type="button"
+                    class="btn btn-danger px-3 text-sm"
+                    aria-label={t('modem.route_remove_label', { n: index + 1 })}
+                    onclick={() => (form.sender_routes = form.sender_routes.filter((/** @type {any} */ other) => other !== row))}
+                  >
+                    {t('modem.route_remove')}
+                  </button>
+                </div>
+                <Field id="modem-route-{row.key}-sender" label={t('modem.route_sender')} problems={routeProblems(index, 'sender')}>
+                  {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+                    <input
+                      id="modem-route-{row.key}-sender"
+                      class="input"
+                      bind:value={row.sender}
+                      maxlength="32"
+                      autocomplete="off"
+                      spellcheck="false"
+                      placeholder={t('modem.route_sender_placeholder')}
+                      aria-describedby={field.describedBy}
+                    />
+                  {/snippet}
+                </Field>
+                <Field id="modem-route-{row.key}-chats" label={t('modem.route_chats')} problems={routeProblems(index, 'recipients')}>
+                  {#snippet children(/** @type {{ describedBy: string | undefined }} */ field)}
+                    <ChipList
+                      id="modem-route-{row.key}-chats"
+                      items={row.recipients}
+                      pattern={CHAT_ID}
+                      inputmode="numeric"
+                      placeholder={t('settings.chat_id')}
+                      describedBy={field.describedBy}
+                      onchange={(items) => (row.recipients = items)}
+                    />
+                  {/snippet}
+                </Field>
+              </div>
+            {/each}
+            <button type="button" class="btn btn-plain w-full sm:w-auto sm:self-start" disabled={form.sender_routes.length >= MAX_ROUTES} onclick={addRoute}>
+              {t('modem.route_add')}
+            </button>
+            {#if routesDirty}
+              <div class="flex flex-col gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 sm:flex-row sm:items-center sm:justify-between" role="status">
+                <span>{t('modem.routes_unsaved')}</span>
                 <button type="submit" form="modem-form" class="btn btn-primary w-full sm:w-auto" disabled={saving}>
                   {saving ? t('common.saving') : t('common.save')}
                 </button>

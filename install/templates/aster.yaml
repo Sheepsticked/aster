@@ -9,7 +9,6 @@ telegram:
   default_recipients: []       # Telegram chat ids as strings, e.g. ["111222333"]; the bot token lives in secrets.env
   alerts: false                # opt-in: modem down > 5 min / Asterisk unreachable > 2 min
   alert_recipients: []         # chat ids that get the alerts; empty: no alerts are sent
-  sender_routes: []            # extra chats for one sender, e.g. [{ sender: "INFO", recipients: ["111222333"] }]; a number or a name
 modems: []
   # - id: gsm1                 # ^[a-z][a-z0-9_]{0,15}$; becomes the driver device name and ${GSM1}
   #   driver: quectel          # quectel | dongle
@@ -22,6 +21,7 @@ modems: []
   #   incoming_context: null   # null = generated aster-ring-gsm1, or a custom context from extensions.conf
   #   group: 1
   #   recipients: null         # null = telegram.default_recipients
+  #   sender_routes: []        # extra chats for one sender on this modem, e.g. [{ sender: "INFO", recipients: ["111222333"] }]
 # Starter phones: each secret is the phone's own number, so change them on the Phones page. All start internal only;
 # assigning modem gsm1 links 504-508 to it, gsm2 links 511-515. 509/510 use direct media.
 phones:

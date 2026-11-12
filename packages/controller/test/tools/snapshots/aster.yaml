@@ -9,7 +9,6 @@ telegram:
   default_recipients: [ "111222333" ]
   alerts: false
   alert_recipients: []
-  sender_routes: []
 modems:
   - id: "gsm1"
     driver: "quectel"
@@ -23,6 +22,7 @@ modems:
     incoming_context: null
     group: 1
     recipients: null
+    sender_routes: []
     ports: null
   - id: "gsm2"
     driver: "dongle"
@@ -36,6 +36,7 @@ modems:
     incoming_context: null
     group: 2
     recipients: null
+    sender_routes: []
     ports: null
 phones:
   - { number: "501", label: null, secret: "501", outbound: null, context: null, direct_media: false }

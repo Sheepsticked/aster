@@ -37,12 +37,12 @@ const phone = (number, outbound, directMedia = false) => ({ number, label: null,
 const TWO_MODEMS = {
   version: 1,
   settings: { ui_language: 'ru', timezone: 'Europe/Istanbul', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
-  telegram: { default_recipients: ['111222333'], alerts: false, alert_recipients: [], sender_routes: [] },
+  telegram: { default_recipients: ['111222333'], alerts: false, alert_recipients: [] },
   modems: [
     { id: 'gsm1', driver: 'quectel', imei: '490154203237534', phone_number: null, enabled: true, uac: true, usb_port: '1-1.3',
-      ring: ['504', '505', '506', '507', '508'], ring_timeout: 120, incoming_context: null, group: 1, recipients: null, ports: null },
+      ring: ['504', '505', '506', '507', '508'], ring_timeout: 120, incoming_context: null, group: 1, recipients: null, sender_routes: [], ports: null },
     { id: 'gsm2', driver: 'dongle', imei: '490154203237542', phone_number: null, enabled: true, uac: false, usb_port: null,
-      ring: ['511', '512', '513', '514', '515'], ring_timeout: 120, incoming_context: null, group: 2, recipients: null, ports: null },
+      ring: ['511', '512', '513', '514', '515'], ring_timeout: 120, incoming_context: null, group: 2, recipients: null, sender_routes: [], ports: null },
   ],
   phones: [
     phone('501', null), phone('502', null), phone('503', null),
@@ -101,10 +101,10 @@ describe('registry', () => {
       assert.deepEqual(registry, {
         version: 1,
         settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
-        telegram: { default_recipients: [], alerts: false, alert_recipients: [], sender_routes: [] },
+        telegram: { default_recipients: [], alerts: false, alert_recipients: [] },
         modems: [{ id: 'gsm1', driver: 'dongle', imei: '490154203237542', phone_number: null, enabled: true, uac: false, usb_port: null, ring: [],
           ring_timeout: 120,
-          incoming_context: null, group: null, recipients: null, ports: null }],
+          incoming_context: null, group: null, recipients: null, sender_routes: [], ports: null }],
         phones: [{ number: '501', label: null, secret: '501', outbound: null, context: null, direct_media: false }],
       });
       assert.deepEqual(flags, []);
@@ -116,7 +116,7 @@ describe('registry', () => {
       assert.deepEqual(DEFAULTS.settings.retention_days, { operations: 90, notifications: 90, messages: 180, calls: 180 });
       assert.equal(DEFAULTS.telegram.alerts, false);
       assert.deepEqual(DEFAULTS.telegram.alert_recipients, []);
-      assert.deepEqual(DEFAULTS.telegram.sender_routes, []);
+      assert.deepEqual(DEFAULTS.modem.sender_routes, []);
     });
 
     test('valid-uac-without-usb-port.yaml is valid and flagged unmapped', () => {
@@ -166,7 +166,7 @@ describe('registry', () => {
       assert.deepEqual(registry, {
         version: 1,
         settings: { ui_language: 'en', timezone: 'Europe/Minsk', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
-        telegram: { default_recipients: [], alerts: false, alert_recipients: [], sender_routes: [] },
+        telegram: { default_recipients: [], alerts: false, alert_recipients: [] },
         modems: [],
         phones,
       });
@@ -190,7 +190,7 @@ describe('registry', () => {
           ['version', 'must be 1, the registry version this controller reads (got "1")'],
           ['modems[0].driver', 'must be quectel or dongle (got "Quectel")'],
           ['modems[0].imei', 'must be a quoted string of 15 digits (got number 490154203237534)'],
-          ['modems[1].extra', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
+          ['modems[1].extra', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, sender_routes, ports)'],
           ['modems[1].uac', 'must be false for a dongle modem (UAC audio is quectel only)'],
           ['phones[1].outbound', 'modem "gsm9" is not in modems'],
           ['phones[2].secret', MESSAGES.secret],
@@ -210,7 +210,7 @@ describe('registry', () => {
       assert.notEqual(registry.modems[0]?.ring, input.modems[0].ring);
       assert.deepEqual(Object.keys(registry), ['version', 'settings', 'telegram', 'modems', 'phones']);
       assert.deepEqual(Object.keys(registry.modems[1] ?? {}), ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring',
-        'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports']);
+        'ring_timeout', 'incoming_context', 'group', 'recipients', 'sender_routes', 'ports']);
       assert.deepEqual(Object.keys(registry.phones[0] ?? {}), ['number', 'label', 'secret', 'outbound', 'context', 'direct_media']);
       assertProblems(() => validate(null), [['', 'must be a mapping (got null)']]);
       assert.throws(() => validate([]), { message: 'invalid registry registry: 1 problem\n  (file): must be a mapping (got a list)' });
@@ -301,7 +301,7 @@ describe('registry', () => {
         ['modems[0].recipients[2]', '"-1001234567890" is already listed at modems[0].recipients[0]'],
       ]],
       ['sender routes: sender, chat ids and keys', (r) => {
-        r.telegram = { sender_routes: [
+        r.modems[1].sender_routes = [
           { sender: 'INFO', recipients: ['42', 'abc', '42'] },
           { sender: '', recipients: ['42'] },
           { sender: '   ', recipients: ['42'] },
@@ -314,21 +314,21 @@ describe('registry', () => {
           { sender: 'INFO' },
           { sender: 'INFO', recipients: ['42'], chat: '42' },
           'INFO',
-        ] };
+        ];
       }, [
-        ['telegram.sender_routes[0].recipients[1]', `${MESSAGES.chatId} (got "abc")`],
-        ['telegram.sender_routes[0].recipients[2]', '"42" is already listed at telegram.sender_routes[0].recipients[0]'],
-        ['telegram.sender_routes[1].sender', `${MESSAGES.sender} (got "")`],
-        ['telegram.sender_routes[2].sender', `${MESSAGES.sender} (got "   ")`],
-        ['telegram.sender_routes[3].sender', `${MESSAGES.sender} (got number 1234567890)`],
-        ['telegram.sender_routes[4].sender', `${MESSAGES.sender} (got "${'x'.repeat(33)}")`],
-        ['telegram.sender_routes[5].sender', `${MESSAGES.sender} (got "two\\nlines")`],
-        ['telegram.sender_routes[6].recipients', 'must list at least one chat id'],
-        ['telegram.sender_routes[7].recipients', 'must be a list (got "42")'],
-        ['telegram.sender_routes[8].sender', 'is required'],
-        ['telegram.sender_routes[9].recipients', 'is required'],
-        ['telegram.sender_routes[10].chat', 'unknown key (allowed: sender, recipients)'],
-        ['telegram.sender_routes[11]', 'must be a mapping (got "INFO")'],
+        ['modems[1].sender_routes[0].recipients[1]', `${MESSAGES.chatId} (got "abc")`],
+        ['modems[1].sender_routes[0].recipients[2]', '"42" is already listed at modems[1].sender_routes[0].recipients[0]'],
+        ['modems[1].sender_routes[1].sender', `${MESSAGES.sender} (got "")`],
+        ['modems[1].sender_routes[2].sender', `${MESSAGES.sender} (got "   ")`],
+        ['modems[1].sender_routes[3].sender', `${MESSAGES.sender} (got number 1234567890)`],
+        ['modems[1].sender_routes[4].sender', `${MESSAGES.sender} (got "${'x'.repeat(33)}")`],
+        ['modems[1].sender_routes[5].sender', `${MESSAGES.sender} (got "two\\nlines")`],
+        ['modems[1].sender_routes[6].recipients', 'must list at least one chat id'],
+        ['modems[1].sender_routes[7].recipients', 'must be a list (got "42")'],
+        ['modems[1].sender_routes[8].sender', 'is required'],
+        ['modems[1].sender_routes[9].recipients', 'is required'],
+        ['modems[1].sender_routes[10].chat', 'unknown key (allowed: sender, recipients)'],
+        ['modems[1].sender_routes[11]', 'must be a mapping (got "INFO")'],
       ]],
       ['sender routes must be a list', (r) => {
         r.telegram = { sender_routes: { sender: 'INFO', recipients: ['42'] } };
@@ -498,7 +498,6 @@ describe('registry', () => {
         '  default_recipients: []',
         '  alerts: false',
         '  alert_recipients: []',
-        '  sender_routes: []',
         'modems:',
         '  - id: "gsm1"',
         '    driver: "dongle"',
@@ -512,6 +511,7 @@ describe('registry', () => {
         '    incoming_context: null',
         '    group: null',
         '    recipients: null',
+        '    sender_routes: []',
         '    ports: null',
         'phones:',
         '  - { number: "501", label: null, secret: "501", outbound: null, context: null, direct_media: false }',
@@ -538,9 +538,9 @@ describe('registry', () => {
       assertProblems(() => validate(input), [['telegram.alert_recipients', 'must be a list (got "abc")']]);
     });
 
-    test('sender routes: absent reads as an empty list, rules are kept in order and written in flow style and load back', () => {
+    test('sender routes: absent reads as an empty list, the rules of a modem are kept in order and written in flow style and load back', () => {
       const input = base();
-      assert.deepEqual(validate(input).telegram.sender_routes, []);
+      assert.deepEqual(validate(input).modems.map((modem) => modem.sender_routes), [[], []]);
       const routes = [
         { sender: '+1234567890', recipients: ['-1009876543210', '42'] },
         { sender: 'INFO', recipients: ['42'] },
@@ -548,12 +548,12 @@ describe('registry', () => {
         { sender: '+', recipients: ['7'] },
         { sender: 'x'.repeat(32), recipients: ['7'] },
       ];
-      input.telegram = { sender_routes: routes };
+      input.modems[1].sender_routes = routes;
       const registry = validate(input);
-      assert.deepEqual(registry.telegram.sender_routes, routes);
-      assert.throws(() => /** @type {any} */ (registry.telegram.sender_routes[0]).recipients.push('1'), TypeError);
+      assert.deepEqual(registry.modems.map((modem) => modem.sender_routes), [[], routes]);
+      assert.throws(() => /** @type {any} */ (registry.modems[1]?.sender_routes[0]).recipients.push('1'), TypeError);
       const text = stringify(registry);
-      assert.match(text, /\n {2}sender_routes:\n {4}- \{ sender: "\+1234567890", recipients: \[ "-1009876543210", "42" \] \}\n {4}- \{ sender: "INFO", recipients: \[ "42" \] \}\n/);
+      assert.match(text, /\n {4}sender_routes:\n {6}- \{ sender: "\+1234567890", recipients: \[ "-1009876543210", "42" \] \}\n {6}- \{ sender: "INFO", recipients: \[ "42" \] \}\n/);
       assert.deepEqual(parse(text), registry);
       assert.equal(stringify(parse(text)), text);
     });
@@ -565,6 +565,24 @@ describe('registry', () => {
       assert.equal(registry.modems[0]?.phone_number, '+1234567890');
       assert.equal(registry.modems[1]?.phone_number, null);
       assert.match(stringify(registry), /\n {4}imei: "[0-9]{15}"\n {4}phone_number: "\+1234567890"\n/);
+    });
+
+    test('telegram.sender_routes of an older file is copied to every modem without repeating a rule it has, and left out of the next write', () => {
+      const input = base();
+      const shared = [{ sender: 'INFO', recipients: ['42'] }, { sender: '+1234567890', recipients: ['7'] }];
+      input.telegram = { default_recipients: ['111222333'], sender_routes: shared };
+      input.modems[0].sender_routes = [{ sender: 'Bank', recipients: ['5'] }, { sender: 'INFO', recipients: ['42'] }];
+      const registry = validate(input);
+      assert.deepEqual(registry.modems.map((modem) => modem.sender_routes), [
+        [{ sender: 'Bank', recipients: ['5'] }, { sender: 'INFO', recipients: ['42'] }, { sender: '+1234567890', recipients: ['7'] }],
+        shared,
+      ]);
+      assert.deepEqual(Object.keys(registry.telegram), ['default_recipients', 'alerts', 'alert_recipients']);
+      const text = stringify(registry);
+      assert.doesNotMatch(text, /^ {2}sender_routes/m);
+      assert.deepEqual(parse(text), registry);
+      input.telegram = { sender_routes: [{ sender: '', recipients: ['42'] }] };
+      assertProblems(() => validate(input), [['telegram.sender_routes[0].sender', `${MESSAGES.sender} (got "")`]]);
     });
 
     test('a modem label of a file written before it was removed is read without a problem and left out of the next write', () => {
@@ -581,7 +599,7 @@ describe('registry', () => {
       input.modems[1].name = 'GSM2';
       input.phones[0].label = 12;
       assertProblems(() => validate(input), [
-        ['modems[1].name', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, ports)'],
+        ['modems[1].name', 'unknown key (allowed: id, driver, imei, phone_number, enabled, uac, usb_port, ring, ring_timeout, incoming_context, group, recipients, sender_routes, ports)'],
         ['phones[0].label', `${MESSAGES.label} (got number 12)`],
       ]);
     });

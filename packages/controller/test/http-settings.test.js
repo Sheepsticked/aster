@@ -21,7 +21,6 @@ describe('http settings routes', () => {
         default_recipients: ['100200300'],
         alerts: false,
         alert_recipients: [],
-        sender_routes: [],
         telegram_token_set: true,
         password_set: true,
         registry: { present: true, hash: h.onDisk().hash },
@@ -59,7 +58,7 @@ describe('http settings routes', () => {
       assert.deepEqual([params.base_hash, params.force], [before, false]);
       assert.deepEqual(params.registry.settings, { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 30, notifications: 45, messages: 200, calls: 30 } },
         'a partial retention_days keeps the other spans, which are not the defaults either');
-      assert.deepEqual(params.registry.telegram, { default_recipients: ['-100200300', '42'], alerts: true, alert_recipients: ['-100900', '7'], sender_routes: [] });
+      assert.deepEqual(params.registry.telegram, { default_recipients: ['-100200300', '42'], alerts: true, alert_recipients: ['-100900', '7'] });
       assert.equal(params.registry.modems.length, 1, 'the rest of the registry is carried through unchanged');
       const disk = h.onDisk().registry;
       assert.deepEqual([disk.settings.ui_language, disk.telegram.alerts, disk.telegram.alert_recipients], ['en', true, ['-100900', '7']]);
@@ -84,7 +83,7 @@ describe('http settings routes', () => {
       assert.equal(response.statusCode, 200);
       assert.deepEqual(response.json().changed, ['alert_recipients']);
       assert.equal(h.applies.length, 1);
-      assert.deepEqual(/** @type {any} */ (h.applies[0]).registry.telegram, { default_recipients: ['100200300'], alerts: false, alert_recipients: ['-100900'], sender_routes: [] });
+      assert.deepEqual(/** @type {any} */ (h.applies[0]).registry.telegram, { default_recipients: ['100200300'], alerts: false, alert_recipients: ['-100900'] });
       const get = async () => (await h.app.inject({ method: 'GET', url: '/api/settings', headers: { cookie } })).json();
       assert.deepEqual((await get()).alert_recipients, ['-100900']);
       assert.deepEqual((await get()).default_recipients, ['100200300'], 'the default recipients are untouched');
@@ -100,59 +99,13 @@ describe('http settings routes', () => {
     }
   });
 
-  test('sender routes round-trip: saved to the registry file, read back, replaced as a whole and cleared with an empty list', async () => {
+  test('sender routes are no longer a setting', async () => {
     const h = await harness();
     try {
       const { cookie } = await h.login();
-      const put = (/** @type {Record<string, unknown>} */ payload) => h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload });
-      const get = async () => (await h.app.inject({ method: 'GET', url: '/api/settings', headers: { cookie } })).json();
-      const routes = [{ sender: 'INFO', recipients: ['-100900', '7'] }, { sender: '+1234567890', recipients: ['42'] }];
-      let response = await put({ sender_routes: routes });
-      assert.equal(response.statusCode, 200);
-      assert.deepEqual(response.json().changed, ['sender_routes']);
-      assert.deepEqual(response.json().settings.sender_routes, routes);
-      assert.equal(h.applies.length, 1);
-      assert.deepEqual(/** @type {any} */ (h.applies[0]).registry.telegram.sender_routes, routes);
-      assert.deepEqual(/** @type {any} */ (h.applies[0]).registry.telegram.default_recipients, ['100200300'], 'the other Telegram fields are untouched');
-      assert.deepEqual((await get()).sender_routes, routes);
-      assert.deepEqual(h.onDisk().registry.telegram.sender_routes, routes);
-
-      response = await put({ sender_routes: routes });
-      assert.deepEqual([response.statusCode, response.json().changed, response.json().operation], [200, [], null], 'the same rules apply nothing');
-      assert.equal(h.applies.length, 1);
-
-      response = await put({ sender_routes: [{ sender: 'Bank', recipients: ['5'] }] });
-      assert.deepEqual((await get()).sender_routes, [{ sender: 'Bank', recipients: ['5'] }]);
-      response = await put({ sender_routes: [] });
-      assert.equal(response.statusCode, 200);
-      assert.deepEqual((await get()).sender_routes, []);
-      assert.deepEqual(h.onDisk().registry.telegram.sender_routes, []);
-      assert.equal(h.applies.length, 3);
-    } finally {
-      await h.stop();
-    }
-  });
-
-  test('a bad sender rule is refused with the path of the entry and writes nothing', async () => {
-    const h = await harness();
-    try {
-      const { cookie } = await h.login();
-      const before = h.onDisk().hash;
-      const problems = async (/** @type {unknown} */ sender_routes) => {
-        const response = await h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { sender_routes } });
-        assert.equal(response.statusCode, 400, JSON.stringify(sender_routes));
-        return response.json().problems.map((/** @type {{ path: string, message: string }} */ p) => p.path);
-      };
-      assert.deepEqual(await problems([{ sender: 'INFO', recipients: ['5'] }, { sender: 'INFO', recipients: ['not a chat id'] }]), ['telegram.sender_routes[1].recipients[0]']);
-      assert.deepEqual(await problems([{ sender: '', recipients: ['5'] }]), ['telegram.sender_routes[0].sender']);
-      assert.deepEqual(await problems([{ sender: 'INFO', recipients: [] }]), ['telegram.sender_routes[0].recipients']);
-      assert.deepEqual(await problems([{ sender: 'INFO' }]), ['telegram.sender_routes[0].recipients']);
-      assert.deepEqual(await problems([{ sender: 'x'.repeat(33), recipients: ['5'] }]), ['telegram.sender_routes[0].sender']);
-      assert.deepEqual(await problems([{ sender: 'INFO', recipients: ['5'], extra: 1 }]), ['telegram.sender_routes[0].extra']);
-      const tooMany = await h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { sender_routes: Array.from({ length: 65 }, () => ({ sender: 'a', recipients: ['5'] })) } });
-      assert.equal(tooMany.statusCode, 400);
-      assert.equal((await h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { sender_routes: 'INFO' } })).statusCode, 400);
-      assert.deepEqual([h.applies.length, h.onDisk().hash], [0, before]);
+      const response = await h.app.inject({ method: 'PUT', url: '/api/settings', headers: { cookie }, payload: { sender_routes: [] } });
+      assert.equal(response.statusCode, 400, 'they belong to a modem: PUT /api/modems/:id');
+      assert.equal(h.applies.length, 0);
     } finally {
       await h.stop();
     }

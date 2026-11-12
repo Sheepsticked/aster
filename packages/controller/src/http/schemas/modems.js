@@ -12,6 +12,9 @@ const DEVICE = { type: 'string', pattern: '^/dev(?:/[A-Za-z0-9_.:+@-]+)+$' };
 /** A modem's own number in international format (config/registry.js, at/simnumber.js). */
 const OWN_NUMBER = { type: 'string', pattern: '^\\+[0-9]{6,15}$' };
 
+// Only the shape of a sender rule: the registry reports an empty sender, a bad chat id or an unknown key with its path.
+const SENDER_ROUTE = { type: 'object', properties: { sender: { type: 'string' }, recipients: { type: 'array', maxItems: 32 } } };
+
 /** The fields a modem has in config/aster.yaml; POST requires id, driver and imei, PUT takes any subset but never the id. */
 const FIELDS = {
   driver: { enum: ['quectel', 'dongle'] },
@@ -25,6 +28,7 @@ const FIELDS = {
   incoming_context: CONTEXT,
   group: { type: ['integer', 'null'], minimum: 0, maximum: 2147483647 },
   recipients: { type: ['array', 'null'], maxItems: 32, items: { type: 'string', pattern: '^-?[0-9]{1,20}$' } },
+  sender_routes: { type: 'array', maxItems: 64, items: SENDER_ROUTE },
   ports: {
     type: ['object', 'null'],
     required: ['data', 'audio'],

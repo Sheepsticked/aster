@@ -40,7 +40,6 @@ export const settings = () => ({
   default_recipients: ['123456789'],
   alerts: true,
   alert_recipients: [],
-  sender_routes: [{ sender: 'INFO', recipients: ['123456789', '-1001234567890'] }],
   telegram_token_set: true,
   password_set: true,
   registry: { present: true, hash: 'b4d6f1a2c3e4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0' },
@@ -60,6 +59,7 @@ const modem = (fields) => ({
   ring_timeout: 25,
   incoming_context: 'from-gsm1',
   recipients: null,
+  sender_routes: [],
   ports: null,
   state: 'ready',
   driver_state: 'Free',
@@ -76,7 +76,7 @@ const modem = (fields) => ({
 });
 
 export const modems = () => [
-  modem({}),
+  modem({ sender_routes: [{ sender: 'INFO', recipients: ['123456789', '-1001234567890'] }] }),
   modem({
     id: 'gsm2',
     driver: 'dongle',

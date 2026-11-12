@@ -544,7 +544,6 @@ function settingsPut(body) {
   }
   if (fields.default_recipients !== undefined) next.default_recipients = [...fields.default_recipients];
   if (fields.alert_recipients !== undefined) next.alert_recipients = [...fields.alert_recipients];
-  if (fields.sender_routes !== undefined) next.sender_routes = fields.sender_routes.map((/** @type {any} */ route) => ({ sender: route.sender, recipients: [...route.recipients] }));
   if (fields.retention_days !== undefined) next.retention_days = { ...next.retention_days, ...fields.retention_days };
   state.settings = next;
   const operation = applied();

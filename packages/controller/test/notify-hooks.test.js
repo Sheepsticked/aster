@@ -29,15 +29,18 @@ after(() => {
 
 /**
  * The registry of these tests: the modems of fixtures/spool/calls (cap_*), gsm1/gsm2 and gsm_test.
- * @param {{ defaults?: string[], routes?: Array<{ sender: string, recipients: string[] }> }} [options]
+ * @param {{ defaults?: string[], routes?: (id: string) => Array<{ sender: string, recipients: string[] }> }} [options]
+ *   routes: the sender rules of each modem
  * @returns {Registry}
  */
-function testRegistry({ defaults = ['111222333', '-1001234567890'], routes = [] } = {}) {
-  const quiet = (/** @type {string} */ id, /** @type {string} */ imei, /** @type {Record<string, unknown>} */ extra = {}) => ({ id, driver: 'quectel', imei, enabled: false, ...extra });
+function testRegistry({ defaults = ['111222333', '-1001234567890'], routes = () => [] } = {}) {
+  const quiet = (/** @type {string} */ id, /** @type {string} */ imei, /** @type {Record<string, unknown>} */ extra = {}) => ({
+    id, driver: 'quectel', imei, enabled: false, sender_routes: routes(id), ...extra,
+  });
   return validate({
     version: 1,
     settings: { timezone: 'Europe/Istanbul' },
-    telegram: { default_recipients: defaults, sender_routes: routes },
+    telegram: { default_recipients: defaults },
     modems: [
       quiet('cap_noanswer', '000000000000103'),
       quiet('cap_busy', '000000000000104', { recipients: ['777'] }),
@@ -229,8 +232,8 @@ describe('notify ingest hooks', () => {
       columns[6] = b64x(sender);
     });
     const missed = (/** @type {string} */ caller, shift = 1) => variant('calls/noanswer.evt', shift, (columns) => { columns[6] = b64x(caller); });
-    /** @param {Array<{ sender: string, recipients: string[] }>} routes @param {string[]} [defaults] */
-    const withRoutes = (routes, defaults) => setup({ registry: () => testRegistry({ routes, defaults }) });
+    /** The same rules on every modem. @param {Array<{ sender: string, recipients: string[] }>} routes @param {string[]} [defaults] */
+    const withRoutes = (routes, defaults) => setup({ registry: () => testRegistry({ routes: () => routes, defaults }) });
     const chats = (/** @type {Array<Record<string, unknown>>} */ rows) => rows.map((row) => row.chat_id);
 
     test('a number rule matches the same digits however the number is written, and nothing else', () => {
@@ -279,12 +282,25 @@ describe('notify ingest hooks', () => {
       assert.deepEqual(chats(notifications()), ['111222333', '-1001234567890', '111222333', '-1001234567890']);
     });
 
-    test('rules apply on every modem and add to the modem recipients', () => {
+    test('rules add to the modem recipients', () => {
       const { ingest, notifications } = withRoutes([{ sender: 'INFO', recipients: ['555'] }]);
       ingest(sms('INFO', 'gsm1')); // recipients 111, 222
       ingest(sms('INFO', 'cap_busy', 2)); // recipients 777
-      ingest(sms('INFO', 'gsm_test', 3)); // not in the registry: the defaults
-      assert.deepEqual(chats(notifications()), ['111', '222', '555', '777', '555', '111222333', '-1001234567890', '555']);
+      assert.deepEqual(chats(notifications()), ['111', '222', '555', '777', '555']);
+    });
+
+    test('a rule applies only on its own modem; a modem not in the registry has none', () => {
+      const own = /** @type {Record<string, Array<{ sender: string, recipients: string[] }>>} */ ({
+        gsm1: [{ sender: 'INFO', recipients: ['555'] }],
+        gsm2: [{ sender: 'INFO', recipients: ['666'] }, { sender: 'BANK', recipients: ['777'] }],
+      });
+      const { ingest, notifications } = setup({ registry: () => testRegistry({ routes: (id) => own[id] ?? [] }) });
+      ingest(sms('INFO', 'gsm1', 1)); // recipients 111, 222 + 555
+      ingest(sms('INFO', 'gsm2', 2)); // defaults + 666
+      ingest(sms('BANK', 'gsm1', 3)); // BANK is a gsm2 rule
+      ingest(sms('INFO', 'gsm_test', 4)); // not in the registry: the defaults only
+      assert.deepEqual(chats(notifications()), ['111', '222', '555', '111222333', '-1001234567890', '666', '111', '222',
+        '111222333', '-1001234567890']);
     });
 
     test('a chat that is also a normal recipient or in two matching rules gets one message; every matching rule adds its chats', () => {
@@ -317,6 +333,20 @@ describe('notify ingest hooks', () => {
       ingest(variant('calls/anonymous-busy.evt', 4));
       assert.equal(notifications().length, 7);
       assert.deepEqual(chats(notifications().slice(6)), ['777'], 'the anonymous call: its modem recipients');
+    });
+
+    test('a missed call uses only the rules of the modem it came in on', () => {
+      const { ingest, notifications } = setup({ registry: () => testRegistry({ routes: (id) => (id === 'gsm1' ? [{ sender: '+1234567890', recipients: ['555'] }] : []) }) });
+      const on = (/** @type {string} */ modem, /** @type {number} */ shift) => variant('calls/noanswer.evt', shift, (columns) => {
+        columns[3] = modem;
+        // a call of its own: a new uniqueid, also in the event id
+        columns[5] = `1789123554.${shift}0`;
+        columns[2] = (columns[2] ?? '').replace(/-[^-]+$/, `-${columns[5]}`);
+        columns[6] = b64x('+1234567890');
+      });
+      ingest(on('gsm1', 1)); // recipients 111, 222 + 555
+      ingest(on('gsm2', 2)); // the rule is on gsm1: defaults only
+      assert.deepEqual(chats(notifications()), ['111', '222', '555', '111222333', '-1001234567890']);
     });
 
     test('rules do not apply to delivery reports', () => {

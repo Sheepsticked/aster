@@ -57,12 +57,12 @@ export function createIngestHooks({ registry, bus = null, log = SILENT, now = Da
       const own = modem?.recipients ?? reg.telegram.default_recipients;
       if (event.kind === 'sms') {
         const { sender, scts, text } = event.data;
-        const chatIds = withSenderRoutes(reg.telegram.sender_routes, sender, own);
+        const chatIds = withSenderRoutes(modem?.sender_routes ?? [], sender, own);
         if (chatIds.length === 0) return;
         enqueue(db, { sourceKind: 'sms', sourceId: rowId, chatIds, text: smsText({ host: host(), modem: event.modem, sender, scts, text }), now: now() });
       } else {
         const { caller, dialstatus } = event.data;
-        const chatIds = withSenderRoutes(reg.telegram.sender_routes, caller, own);
+        const chatIds = withSenderRoutes(modem?.sender_routes ?? [], caller, own);
         if (chatIds.length === 0) return;
         const text = missedCallText({ host: host(), modem: event.modem, caller, at: event.emittedMs, timeZone: reg.settings.timezone, reason: missedReason(dialstatus) ?? dialstatus });
         enqueue(db, { sourceKind: 'call', sourceId: rowId, chatIds, text, now: now() });

@@ -22,6 +22,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
  * @property {string | null} incoming_context
  * @property {number | null} group
  * @property {readonly string[] | null} recipients
+ * @property {readonly SenderRoute[]} sender_routes  extra chats for the SMS and missed calls of chosen senders on this modem
  * @property {{ readonly data: string, readonly audio: string } | null} ports
  */
 /**
@@ -42,7 +43,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
  * @typedef {object} Registry
  * @property {1} version
  * @property {{ ui_language: 'ru' | 'en', timezone: string, retention_days: { operations: number, notifications: number, messages: number, calls: number } }} settings
- * @property {{ default_recipients: readonly string[], alerts: boolean, alert_recipients: readonly string[], sender_routes: readonly SenderRoute[] }} telegram
+ * @property {{ default_recipients: readonly string[], alerts: boolean, alert_recipients: readonly string[] }} telegram
  * @property {readonly Modem[]} modems
  * @property {readonly Phone[]} phones
  */
@@ -52,14 +53,14 @@ const KEYS = {
   top: ['version', 'settings', 'telegram', 'modems', 'phones'],
   settings: ['ui_language', 'timezone', 'retention_days'],
   retention: ['operations', 'notifications', 'messages', 'calls'],
-  telegram: ['default_recipients', 'alerts', 'alert_recipients', 'sender_routes'],
+  telegram: ['default_recipients', 'alerts', 'alert_recipients'],
   senderRoute: ['sender', 'recipients'],
-  modem: ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'ports'],
+  modem: ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'sender_routes', 'ports'],
   ports: ['data', 'audio'],
   phone: ['number', 'label', 'secret', 'outbound', 'context', 'direct_media'],
 };
 /** Keys an older file may still have: read and dropped, so the next write leaves them out. */
-const DROPPED = { modem: ['label'] };
+const DROPPED = { modem: ['label'], telegram: ['sender_routes'] };
 
 /**
  * Values of absent keys. Required keys (version, modems, phones; modem id, driver, imei, enabled; phone number, secret) have none.
@@ -68,8 +69,8 @@ const DROPPED = { modem: ['label'] };
  */
 export const DEFAULTS = deepFreeze({
   settings: { ui_language: 'en', timezone: 'UTC', retention_days: { operations: 90, notifications: 90, messages: 180, calls: 180 } },
-  telegram: { default_recipients: [], alerts: false, alert_recipients: [], sender_routes: [] },
-  modem: { phone_number: null, uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, ports: null },
+  telegram: { default_recipients: [], alerts: false, alert_recipients: [] },
+  modem: { phone_number: null, uac: false, usb_port: null, ring: [], ring_timeout: 120, incoming_context: null, group: null, recipients: null, sender_routes: [], ports: null },
   phone: { label: null, outbound: null, context: null, direct_media: false },
 });
 
@@ -393,6 +394,7 @@ function normalizeModem(c, raw, path, seen) {
   const recipients = Object.hasOwn(raw, 'recipients') && raw.recipients !== null
     ? c.list(raw.recipients, `${path}.recipients`, matching(CHAT_ID), MESSAGE.chatId)
     : d.recipients;
+  const senderRoutes = senderRoutesOf(c, raw, 'sender_routes', path);
   /** @type {Modem['ports']} */
   let ports = d.ports;
   const rawPorts = raw.ports;
@@ -405,7 +407,7 @@ function normalizeModem(c, raw, path, seen) {
   }
   return {
     id, driver, imei, phone_number: phoneNumber, enabled, uac, usb_port: usbPort, ring, ring_timeout: ringTimeout, incoming_context: incomingContext, group, recipients,
-    ports,
+    sender_routes: senderRoutes, ports,
   };
 }
 
@@ -446,6 +448,42 @@ function normalizeSenderRoute(c, raw, path) {
 }
 
 /**
+ * `modem` with each of `shared` it does not have yet appended to its sender rules.
+ * @param {Modem} modem
+ * @param {readonly SenderRoute[]} shared
+ * @returns {Modem}
+ */
+function withSharedRoutes(modem, shared) {
+  const own = new Set(modem.sender_routes.map((route) => JSON.stringify(route)));
+  const added = shared.filter((route) => !own.has(JSON.stringify(route)));
+  return added.length === 0 ? modem : { ...modem, sender_routes: [...modem.sender_routes, ...added] };
+}
+
+/**
+ * The sender rules under `obj[key]`; none when the key is absent.
+ * @param {Checker} c
+ * @param {Record<string, unknown>} obj
+ * @param {string} key
+ * @param {string} path  path of obj
+ * @returns {SenderRoute[]}
+ */
+function senderRoutesOf(c, obj, key, path) {
+  const raw = obj[key];
+  if (!Object.hasOwn(obj, key)) return [];
+  if (!Array.isArray(raw)) {
+    c.fail(join(path, key), `must be a list (got ${describe(raw)})`);
+    return [];
+  }
+  /** @type {SenderRoute[]} */
+  const routes = [];
+  for (const [index, item] of raw.entries()) {
+    const route = normalizeSenderRoute(c, item, `${join(path, key)}[${index}]`);
+    if (route) routes.push(route);
+  }
+  return routes;
+}
+
+/**
  * @param {Checker} c
  * @param {unknown} input
  * @returns {Registry | undefined}
@@ -472,7 +510,9 @@ function normalize(c, input) {
 
   const telegram = { ...DEFAULTS.telegram };
   const rawTelegram = input.telegram;
-  if (Object.hasOwn(input, 'telegram') && c.mapping(rawTelegram, 'telegram', KEYS.telegram)) {
+  /** @type {SenderRoute[]} */
+  let sharedRoutes = [];
+  if (Object.hasOwn(input, 'telegram') && c.mapping(rawTelegram, 'telegram', KEYS.telegram, [], DROPPED.telegram)) {
     if (Object.hasOwn(rawTelegram, 'default_recipients')) {
       telegram.default_recipients = c.list(rawTelegram.default_recipients, 'telegram.default_recipients', matching(CHAT_ID), MESSAGE.chatId);
     }
@@ -480,18 +520,8 @@ function normalize(c, input) {
     if (Object.hasOwn(rawTelegram, 'alert_recipients')) {
       telegram.alert_recipients = c.list(rawTelegram.alert_recipients, 'telegram.alert_recipients', matching(CHAT_ID), MESSAGE.chatId);
     }
-    const rawRoutes = rawTelegram.sender_routes;
-    if (Array.isArray(rawRoutes)) {
-      /** @type {SenderRoute[]} */
-      const routes = [];
-      for (const [index, raw] of rawRoutes.entries()) {
-        const route = normalizeSenderRoute(c, raw, `telegram.sender_routes[${index}]`);
-        if (route) routes.push(route);
-      }
-      telegram.sender_routes = routes;
-    } else if (Object.hasOwn(rawTelegram, 'sender_routes')) {
-      c.fail('telegram.sender_routes', `must be a list (got ${describe(rawRoutes)})`);
-    }
+    // Rules of an older file that applied to every modem: each modem gets a copy below.
+    sharedRoutes = senderRoutesOf(c, rawTelegram, 'sender_routes', 'telegram');
   }
 
   // Ring members are checked against the phone numbers as written, so modem problems stay in document order.
@@ -509,7 +539,7 @@ function normalize(c, input) {
     const seen = { ids, imeis: new Map(), usbPorts: new Map(), devices: new Map(), phoneNumbers };
     for (const [index, raw] of rawModems.entries()) {
       const modem = normalizeModem(c, raw, `modems[${index}]`, seen);
-      if (modem) modems.push(modem);
+      if (modem) modems.push(withSharedRoutes(modem, sharedRoutes));
     }
   } else if (Object.hasOwn(input, 'modems')) {
     c.fail('modems', `must be a list (got ${describe(rawModems)})`);
@@ -642,9 +672,9 @@ function render(registry) {
   flow(['settings', 'retention_days']);
   flow(['telegram', 'default_recipients']);
   flow(['telegram', 'alert_recipients']);
-  for (const index of registry.telegram.sender_routes.keys()) flow(['telegram', 'sender_routes', index]);
-  for (const index of registry.modems.keys()) {
+  for (const [index, modem] of registry.modems.entries()) {
     for (const key of ['ring', 'recipients', 'ports']) flow(['modems', index, key]);
+    for (const route of modem.sender_routes.keys()) flow(['modems', index, 'sender_routes', route]);
   }
   for (const index of registry.phones.keys()) flow(['phones', index]);
   return doc.toString({ lineWidth: 0, defaultStringType: 'QUOTE_DOUBLE', defaultKeyType: 'PLAIN' });
