@@ -28,11 +28,11 @@ after(() => {
  * @param {{ alerts?: boolean, alertRecipients?: string[], modems?: Array<Record<string, unknown>> }} [options]
  * @returns {Registry}
  */
-function registryWith({ alerts = true, alertRecipients, modems } = {}) {
+function registryWith({ alerts = true, alertRecipients = ['900'], modems } = {}) {
   return validate({
     version: 1,
     settings: { timezone: 'UTC' },
-    telegram: { default_recipients: ['111222333'], alerts, ...(alertRecipients ? { alert_recipients: alertRecipients } : {}) },
+    telegram: { default_recipients: ['111222333'], alerts, alert_recipients: alertRecipients },
     modems: modems ?? [
       { id: 'gsm1', driver: 'quectel', imei: '490154203237534', enabled: true, recipients: ['111'] },
       { id: 'gsm2', driver: 'dongle', imei: '490154203237542', enabled: true },
@@ -73,7 +73,7 @@ function addOperation(db, { kind, modemId, at, status = 'done' }) {
 }
 
 describe('notify alerts', () => {
-  test('a modem absent for 5 min raises one alert to its recipients; back to ready raises one recovery', () => {
+  test('a modem absent for 5 min raises one alert to the alert recipients; back to ready raises one recovery', () => {
     assert.deepEqual([...ALERT_STATES], ['absent', 'no-network', 'flapping', 'stopped', 'connecting']);
     assert.deepEqual({ ...DEFAULTS }, { checkMs: 5000, modemMs: 300_000, amiMs: 120_000 });
     const { alerts, publish, notifications, stored, clock } = setup();
@@ -85,7 +85,7 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
     clock.now = T0 + 6 * MIN;
     assert.deepEqual(alerts.check().alerts, ['gsm1']);
-    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:01:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:01:00 +00:00']]);
     assert.deepEqual(stored(), { ami: null, modems: { gsm1: { state: 'absent', since: T0 + MIN } } });
     clock.now = T0 + 30 * MIN;
     assert.deepEqual(alerts.check().alerts, [], 'one alert per problem');
@@ -93,7 +93,7 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check().recoveries, [], 'connecting is the same outage, not a recovery');
     publish('gsm1', 'busy');
     assert.deepEqual(alerts.check().recoveries, ['gsm1']);
-    assert.deepEqual(notifications().at(-1), ['111', '[aster-test] Recovered: modem gsm1 is busy (absent since 2026-09-11 09:01:00 +00:00)']);
+    assert.deepEqual(notifications().at(-1), ['900', '[aster-test] Recovered: modem gsm1 is busy (absent since 2026-09-11 09:01:00 +00:00)']);
     assert.deepEqual(stored(), { ami: null, modems: {} });
     alerts.check();
     assert.equal(notifications().length, 2);
@@ -109,14 +109,14 @@ describe('notify alerts', () => {
     publish('gsm2', 'absent');
     clock.now = T0 + 5 * MIN;
     assert.deepEqual(alerts.check().alerts, ['gsm2']);
-    assert.deepEqual(notifications(), [['111222333', '[aster-test] Alert: modem gsm2 is absent since 2026-09-11 09:00:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm2 is absent since 2026-09-11 09:00:00 +00:00']]);
     publish('gsm2', 'unverified');
     clock.now = T0 + 20 * MIN;
     assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
     publish('gsm2', 'no-network');
     publish('gsm2', 'ready');
     assert.deepEqual(alerts.check().recoveries, ['gsm2']);
-    assert.deepEqual(notifications().at(-1), ['111222333', '[aster-test] Recovered: modem gsm2 is ready (absent since 2026-09-11 09:00:00 +00:00)']);
+    assert.deepEqual(notifications().at(-1), ['900', '[aster-test] Recovered: modem gsm2 is ready (absent since 2026-09-11 09:00:00 +00:00)']);
     // a short problem never alerts
     publish('gsm2', 'no-network');
     clock.now += 4 * MIN;
@@ -143,13 +143,13 @@ describe('notify alerts', () => {
       assert.deepEqual(alerts.check(), { alerts: [], recoveries: [], skipped: null });
       clock.now = T0 + 6 * MIN;
       assert.deepEqual(alerts.check().alerts, ['gsm1']);
-      assert.deepEqual(notifications(), [['111', `[aster-test] Alert: modem gsm1 ${now} since 2026-09-11 09:01:00 +00:00`]]);
+      assert.deepEqual(notifications(), [['900', `[aster-test] Alert: modem gsm1 ${now} since 2026-09-11 09:01:00 +00:00`]]);
       assert.deepEqual(stored(), { ami: null, modems: { gsm1: { state, since: T0 + MIN } } });
       clock.now = T0 + 30 * MIN;
       assert.deepEqual(alerts.check().alerts, [], 'one alert per problem');
       publish('gsm1', 'ready');
       assert.deepEqual(alerts.check().recoveries, ['gsm1']);
-      assert.deepEqual(notifications().at(-1), ['111', `[aster-test] Recovered: modem gsm1 is ready (${past} since 2026-09-11 09:01:00 +00:00)`]);
+      assert.deepEqual(notifications().at(-1), ['900', `[aster-test] Recovered: modem gsm1 is ready (${past} since 2026-09-11 09:01:00 +00:00)`]);
       assert.deepEqual(stored(), { ami: null, modems: {} });
       assert.equal(notifications().length, 2);
     });
@@ -165,10 +165,10 @@ describe('notify alerts', () => {
     publish('gsm1', 'flapping');
     clock.now = T0 + 5 * MIN;
     assert.deepEqual(alerts.check().alerts, ['gsm1']);
-    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 keeps restarting since 2026-09-11 09:00:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm1 keeps restarting since 2026-09-11 09:00:00 +00:00']]);
     publish('gsm1', 'ready');
     assert.deepEqual(alerts.check().recoveries, ['gsm1']);
-    assert.deepEqual(notifications().at(-1), ['111', '[aster-test] Recovered: modem gsm1 is ready (restarting since 2026-09-11 09:00:00 +00:00)']);
+    assert.deepEqual(notifications().at(-1), ['900', '[aster-test] Recovered: modem gsm1 is ready (restarting since 2026-09-11 09:00:00 +00:00)']);
 
     clock.now = T0 + 20 * MIN;
     publish('gsm2', 'connecting');
@@ -193,7 +193,7 @@ describe('notify alerts', () => {
     assert.equal([...ALERT_STATES].includes(/** @type {any} */ ('disabled')), false);
   });
 
-  test('alert recipients get every modem and Asterisk alert and recovery instead of the modem or default recipients', () => {
+  test('alert recipients get every modem and Asterisk alert and recovery, the modem and default recipients none', () => {
     const ami = { connected: false };
     const registry = registryWith({ alertRecipients: ['900', '901'] });
     const { alerts, publish, notifications, clock } = setup({ ami, registry });
@@ -213,21 +213,18 @@ describe('notify alerts', () => {
     assert.equal(sent.filter(([, text]) => String(text).includes('Recovered: ')).length, 6);
   });
 
-  test('an empty alert recipients list keeps the modem and default routing; a list set later applies from the next message', () => {
+  test('with no alert recipients nobody gets an alert, not the modem or default recipients; a list set later gets the next one', () => {
     const ami = { connected: false };
     const { alerts, publish, notifications, clock, state } = setup({ ami, registry: registryWith({ alertRecipients: [] }) });
     alerts.start();
     publish('gsm1', 'stopped');
-    publish('gsm2', 'connecting');
     clock.now = T0 + 5 * MIN;
-    alerts.check();
-    assert.deepEqual(notifications().map(([chat]) => chat).sort(), ['111', '111222333', '111222333']);
-    state.registry = registryWith({ alertRecipients: ['900'] });
-    ami.connected = true;
-    publish('gsm1', 'ready');
-    publish('gsm2', 'ready');
-    alerts.check();
-    assert.deepEqual(notifications().slice(3).map(([chat]) => chat), ['900', '900', '900']);
+    assert.deepEqual(alerts.check().alerts, []);
+    assert.deepEqual(notifications(), []);
+    state.registry = registryWith({ alertRecipients: ['901'] });
+    clock.now = T0 + 6 * MIN;
+    assert.deepEqual(alerts.check().alerts.sort(), ['ami', 'gsm1']);
+    assert.deepEqual(notifications().map(([chat]) => chat), ['901', '901']);
   });
 
   test('a modem stopped on request does not alert; the requested stop survives a restart of the controller', () => {
@@ -262,7 +259,7 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check().alerts, []);
     clock.now = T0 + 5 * MIN;
     assert.deepEqual(alerts.check().alerts, ['gsm1']);
-    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:00:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:00:00 +00:00']]);
   });
 
   test('a stop, then a start, then a stop by the driver alerts at 5 min', () => {
@@ -288,7 +285,7 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check().alerts, []);
     clock.now = T0 + 15 * MIN;
     assert.deepEqual(alerts.check().alerts, ['gsm1']);
-    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:10:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:10:00 +00:00']]);
   });
 
   test('after a stop on request a start that fails leaves the modem stopped and it alerts 5 min later; a failed stop never exempts', () => {
@@ -303,7 +300,7 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check().alerts, [], 'the 5 min start with the failed start');
     clock.now = T0 + 15 * MIN + 5000;
     assert.deepEqual(alerts.check().alerts, ['gsm1']);
-    assert.deepEqual(notifications(), [['111', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:10:05 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: modem gsm1 is stopped by the driver since 2026-09-11 09:10:05 +00:00']]);
 
     publish('gsm2', 'stopped');
     addOperation(db, { kind: 'modem-stop', modemId: 'gsm2', at: clock.now, status: 'failed' });
@@ -336,7 +333,7 @@ describe('notify alerts', () => {
     }
   });
 
-  test('AMI not up for 2 min raises one alert to the default recipients; up again raises one recovery', () => {
+  test('AMI not up for 2 min raises one alert to the alert recipients; up again raises one recovery', () => {
     const ami = { connected: false };
     const { alerts, notifications, stored, clock } = setup({ ami });
     alerts.start();
@@ -344,13 +341,13 @@ describe('notify alerts', () => {
     assert.deepEqual(alerts.check().alerts, []);
     clock.now = T0 + 2 * MIN;
     assert.deepEqual(alerts.check().alerts, ['ami']);
-    assert.deepEqual(notifications(), [['111222333', '[aster-test] Alert: Asterisk is unreachable (no AMI connection) since 2026-09-11 09:00:00 +00:00']]);
+    assert.deepEqual(notifications(), [['900', '[aster-test] Alert: Asterisk is unreachable (no AMI connection) since 2026-09-11 09:00:00 +00:00']]);
     assert.deepEqual(stored().ami, { since: T0 });
     clock.now = T0 + 10 * MIN;
     alerts.check();
     ami.connected = true;
     assert.deepEqual(alerts.check().recoveries, ['ami']);
-    assert.deepEqual(notifications().at(-1), ['111222333', '[aster-test] Recovered: Asterisk is reachable again (unreachable since 2026-09-11 09:00:00 +00:00)']);
+    assert.deepEqual(notifications().at(-1), ['900', '[aster-test] Recovered: Asterisk is reachable again (unreachable since 2026-09-11 09:00:00 +00:00)']);
     // a drop seen by one check and gone by the next is no alert
     ami.connected = false;
     clock.now += MIN;
@@ -381,8 +378,8 @@ describe('notify alerts', () => {
     state.registry = registryWith({ alerts: true });
     assert.deepEqual(alerts.check().alerts.sort(), ['ami', 'gsm1']);
     assert.deepEqual(notifications(), [
-      ['111222333', '[aster-test] Alert: Asterisk is unreachable (no AMI connection) since 2026-09-11 09:00:00 +00:00'],
-      ['111', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:00:00 +00:00'],
+      ['900', '[aster-test] Alert: Asterisk is unreachable (no AMI connection) since 2026-09-11 09:00:00 +00:00'],
+      ['900', '[aster-test] Alert: modem gsm1 is absent since 2026-09-11 09:00:00 +00:00'],
     ]);
     state.registry = registryWith({ alerts: false });
     ami.connected = true;
@@ -411,8 +408,8 @@ describe('notify alerts', () => {
     second.publish('gsm1', 'ready');
     assert.deepEqual(second.alerts.check().recoveries, ['gsm1']);
     assert.deepEqual(second.notifications(), [
-      ['111', '[aster-test] Alert: modem gsm1 has no GSM network since 2026-09-11 09:00:00 +00:00'],
-      ['111', '[aster-test] Recovered: modem gsm1 is ready (without GSM network since 2026-09-11 09:00:00 +00:00)'],
+      ['900', '[aster-test] Alert: modem gsm1 has no GSM network since 2026-09-11 09:00:00 +00:00'],
+      ['900', '[aster-test] Recovered: modem gsm1 is ready (without GSM network since 2026-09-11 09:00:00 +00:00)'],
     ]);
   });
 

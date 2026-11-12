@@ -330,7 +330,7 @@
   "settings.alerts": "Report a modem or Asterisk being down",
   "settings.alerts_hint": "A modem gone, without network, restarting, stopped or not connecting for more than 5 minutes, or Asterisk unreachable for more than 2.",
   "settings.alert_recipients": "Alert recipients",
-  "settings.alert_recipients_hint": "Chat ids that get the alerts. Empty: the modem's recipients or the default recipients.",
+  "settings.alert_recipients_hint": "Chat ids that get the alerts. Empty: no alerts are sent.",
   "settings.routes": "Sender rules",
   "settings.routes_hint": "An SMS or missed call from a chosen sender also goes to the chats of its rule, in addition to the usual recipients. Write the sender as the Messages page shows it in the Number column: a number like +1234567890 or a name like INFO.",
   "settings.routes_none": "No rules yet.",
