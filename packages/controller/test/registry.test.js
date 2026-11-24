@@ -314,6 +314,7 @@ describe('registry', () => {
           { sender: 'INFO' },
           { sender: 'INFO', recipients: ['42'], chat: '42' },
           'INFO',
+          { sender: 'INFO', recipients: ['42'], only: 'yes' },
         ];
       }, [
         ['modems[1].sender_routes[0].recipients[1]', `${MESSAGES.chatId} (got "abc")`],
@@ -327,8 +328,9 @@ describe('registry', () => {
         ['modems[1].sender_routes[7].recipients', 'must be a list (got "42")'],
         ['modems[1].sender_routes[8].sender', 'is required'],
         ['modems[1].sender_routes[9].recipients', 'is required'],
-        ['modems[1].sender_routes[10].chat', 'unknown key (allowed: sender, recipients)'],
+        ['modems[1].sender_routes[10].chat', 'unknown key (allowed: sender, recipients, only)'],
         ['modems[1].sender_routes[11]', 'must be a mapping (got "INFO")'],
+        ['modems[1].sender_routes[12].only', 'must be true or false (got "yes")'],
       ]],
       ['sender routes must be a list', (r) => {
         r.telegram = { sender_routes: { sender: 'INFO', recipients: ['42'] } };
@@ -543,17 +545,17 @@ describe('registry', () => {
       assert.deepEqual(validate(input).modems.map((modem) => modem.sender_routes), [[], []]);
       const routes = [
         { sender: '+1234567890', recipients: ['-1009876543210', '42'] },
-        { sender: 'INFO', recipients: ['42'] },
-        { sender: 'Банк 24', recipients: ['7'] },
+        { sender: 'INFO', recipients: ['42'], only: true },
+        { sender: 'Банк 24', recipients: ['7'], only: false },
         { sender: '+', recipients: ['7'] },
         { sender: 'x'.repeat(32), recipients: ['7'] },
       ];
       input.modems[1].sender_routes = routes;
       const registry = validate(input);
-      assert.deepEqual(registry.modems.map((modem) => modem.sender_routes), [[], routes]);
+      assert.deepEqual(registry.modems.map((modem) => modem.sender_routes), [[], routes.map((route) => ({ only: false, ...route }))]);
       assert.throws(() => /** @type {any} */ (registry.modems[1]?.sender_routes[0]).recipients.push('1'), TypeError);
       const text = stringify(registry);
-      assert.match(text, /\n {4}sender_routes:\n {6}- \{ sender: "\+1234567890", recipients: \[ "-1009876543210", "42" \] \}\n {6}- \{ sender: "INFO", recipients: \[ "42" \] \}\n/);
+      assert.match(text, /\n {4}sender_routes:\n {6}- \{ sender: "\+1234567890", recipients: \[ "-1009876543210", "42" \], only: false \}\n {6}- \{ sender: "INFO", recipients: \[ "42" \], only: true \}\n/);
       assert.deepEqual(parse(text), registry);
       assert.equal(stringify(parse(text)), text);
     });
@@ -573,9 +575,10 @@ describe('registry', () => {
       input.telegram = { default_recipients: ['111222333'], sender_routes: shared };
       input.modems[0].sender_routes = [{ sender: 'Bank', recipients: ['5'] }, { sender: 'INFO', recipients: ['42'] }];
       const registry = validate(input);
+      const rule = (/** @type {{ sender: string, recipients: string[] }} */ route) => ({ ...route, only: false });
       assert.deepEqual(registry.modems.map((modem) => modem.sender_routes), [
-        [{ sender: 'Bank', recipients: ['5'] }, { sender: 'INFO', recipients: ['42'] }, { sender: '+1234567890', recipients: ['7'] }],
-        shared,
+        [{ sender: 'Bank', recipients: ['5'] }, { sender: 'INFO', recipients: ['42'] }, { sender: '+1234567890', recipients: ['7'] }].map(rule),
+        shared.map(rule),
       ]);
       assert.deepEqual(Object.keys(registry.telegram), ['default_recipients', 'alerts', 'alert_recipients']);
       const text = stringify(registry);

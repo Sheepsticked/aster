@@ -236,13 +236,14 @@ receive messages. Aster then sends one message per incoming SMS and per missed c
 (`[aster] SMS gsm1 from …`). It can also warn you when a modem has been down for five minutes, which is off unless
 you turn it on.
 
-To send the SMS and missed calls of one sender to more chats, add a rule on the modem's page under **Sender rules**:
-the sender, written as the Messages page shows it (a number such as `+1234567890`, or a name such as `INFO`), and the
-chat ids. Each modem has its own rules, so a rule on gsm1 does nothing for messages that arrive on gsm2. The chats of a
-matching rule get the message in addition to the usual recipients, each chat once. A number is matched by its digits
-only, so spaces, dashes and brackets do not matter, but `001234567890` is not `+1234567890`; a name is matched whole,
-ignoring case. In `aster.yaml` the rules are the modem's `sender_routes` list; an older `telegram.sender_routes` list is
-copied to every modem when the file is read.
+To send the SMS and missed calls of one sender to more chats, add a rule on the modem's page under **Sender rules**: the
+sender, written as the Messages page shows it (a number such as `+1234567890`, or a name such as `INFO`), and the chat
+ids. Each modem has its own rules, so a rule on gsm1 does nothing for messages that arrive on gsm2. The chats of a
+matching rule get the message in addition to the usual recipients, each chat once. Tick **Only these chats** on a rule
+to send that sender's messages to the rule's chats alone: the usual recipients then do not get them. A number is matched
+by its digits only, so spaces, dashes and brackets do not matter, but `001234567890` is not `+1234567890`; a name is
+matched whole, ignoring case. In `aster.yaml` the rules are the modem's `sender_routes` list; an older
+`telegram.sender_routes` list is copied to every modem when the file is read.
 
 ### If a call sounds bad
 

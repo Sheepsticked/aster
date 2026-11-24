@@ -40,7 +40,7 @@ export function modemView(modem, ctx, states) {
     ring_timeout: modem.ring_timeout,
     incoming_context: modem.incoming_context,
     recipients: modem.recipients === null ? null : [...modem.recipients],
-    sender_routes: modem.sender_routes.map((route) => ({ sender: route.sender, recipients: [...route.recipients] })),
+    sender_routes: modem.sender_routes.map((route) => ({ sender: route.sender, recipients: [...route.recipients], only: route.only })),
     ports: modem.ports === null ? null : { ...modem.ports },
     state: ctx.devices?.stateOf(modem) ?? 'unverified',
     driver_state: row?.driver_state ?? null,

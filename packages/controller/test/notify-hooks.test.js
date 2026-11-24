@@ -29,7 +29,7 @@ after(() => {
 
 /**
  * The registry of these tests: the modems of fixtures/spool/calls (cap_*), gsm1/gsm2 and gsm_test.
- * @param {{ defaults?: string[], routes?: (id: string) => Array<{ sender: string, recipients: string[] }> }} [options]
+ * @param {{ defaults?: string[], routes?: (id: string) => Array<{ sender: string, recipients: string[], only?: boolean }> }} [options]
  *   routes: the sender rules of each modem
  * @returns {Registry}
  */
@@ -232,7 +232,7 @@ describe('notify ingest hooks', () => {
       columns[6] = b64x(sender);
     });
     const missed = (/** @type {string} */ caller, shift = 1) => variant('calls/noanswer.evt', shift, (columns) => { columns[6] = b64x(caller); });
-    /** The same rules on every modem. @param {Array<{ sender: string, recipients: string[] }>} routes @param {string[]} [defaults] */
+    /** The same rules on every modem. @param {Array<{ sender: string, recipients: string[], only?: boolean }>} routes @param {string[]} [defaults] */
     const withRoutes = (routes, defaults) => setup({ registry: () => testRegistry({ routes: () => routes, defaults }) });
     const chats = (/** @type {Array<Record<string, unknown>>} */ rows) => rows.map((row) => row.chat_id);
 
@@ -333,6 +333,25 @@ describe('notify ingest hooks', () => {
       ingest(variant('calls/anonymous-busy.evt', 4));
       assert.equal(notifications().length, 7);
       assert.deepEqual(chats(notifications().slice(6)), ['777'], 'the anonymous call: its modem recipients');
+    });
+
+    test('an only rule sends its sender to the chats of the matching rules alone; other senders keep the normal recipients', () => {
+      const { ingest, notifications } = withRoutes([
+        { sender: 'BANK', recipients: ['555'], only: true },
+        { sender: 'bank', recipients: ['666'] },
+        { sender: 'INFO', recipients: ['777'], only: false },
+      ]);
+      ingest(sms('BANK', 'gsm1', 1)); // not to 111, 222
+      ingest(sms('Bank', 'gsm2', 2)); // not to the defaults
+      ingest(sms('INFO', 'gsm1', 3)); // a rule that is not only adds as before
+      ingest(sms('OTHER', 'gsm1', 4));
+      assert.deepEqual(chats(notifications()), ['555', '666', '555', '666', '111', '222', '777', '111', '222']);
+    });
+
+    test('a missed call from the sender of an only rule goes to the rule chats alone', () => {
+      const { ingest, notifications } = withRoutes([{ sender: '+375290000109', recipients: ['555'], only: true }]);
+      ingest('calls/did-noanswer.evt'); // missed, from +375290000109
+      assert.deepEqual(chats(notifications()), ['555']);
     });
 
     test('a missed call uses only the rules of the modem it came in on', () => {

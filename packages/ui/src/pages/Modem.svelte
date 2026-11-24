@@ -141,7 +141,7 @@
   let routeKey = 0;
   /** A rule row with nothing typed in it yet is not a rule. */
   const filled = (/** @type {any} */ row) => row.sender.trim() !== '' || row.recipients.length > 0;
-  const routesOf = (/** @type {any[]} */ rows) => rows.filter(filled).map((row) => ({ sender: row.sender.trim(), recipients: [...row.recipients] }));
+  const routesOf = (/** @type {any[]} */ rows) => rows.filter(filled).map((row) => ({ sender: row.sender.trim(), recipients: [...row.recipients], only: row.only }));
 
   /** @param {any} entry  a modem as `modemView` sends it */
   function editable(entry) {
@@ -157,7 +157,7 @@
       group: entry.group === null || entry.group === undefined ? '' : String(entry.group),
       ownRecipients: Array.isArray(entry.recipients),
       recipients: [...(entry.recipients ?? [])],
-      sender_routes: (entry.sender_routes ?? []).map((/** @type {any} */ route) => ({ key: routeKey++, sender: route.sender, recipients: [...route.recipients] })),
+      sender_routes: (entry.sender_routes ?? []).map((/** @type {any} */ route) => ({ key: routeKey++, sender: route.sender, recipients: [...route.recipients], only: route.only === true })),
     };
   }
 
@@ -325,7 +325,7 @@
 
   async function addRoute() {
     const key = routeKey++;
-    form.sender_routes = [...form.sender_routes, { key, sender: '', recipients: [] }];
+    form.sender_routes = [...form.sender_routes, { key, sender: '', recipients: [], only: false }];
     await tick();
     document.getElementById(`modem-route-${key}-sender`)?.focus();
   }
@@ -944,6 +944,13 @@
                     />
                   {/snippet}
                 </Field>
+                <div class="flex flex-col gap-1">
+                  <label class="flex min-h-11 items-center gap-2">
+                    <input type="checkbox" class="h-5 w-5" bind:checked={row.only} aria-describedby="modem-route-{row.key}-only-hint" />
+                    <span>{t('modem.route_only')}</span>
+                  </label>
+                  <p id="modem-route-{row.key}-only-hint" class="text-sm text-slate-500">{t('modem.route_only_hint')}</p>
+                </div>
               </div>
             {/each}
             <button type="button" class="btn btn-plain w-full sm:w-auto sm:self-start" disabled={form.sender_routes.length >= MAX_ROUTES} onclick={addRoute}>

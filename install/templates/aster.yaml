@@ -21,7 +21,7 @@ modems: []
   #   incoming_context: null   # null = generated aster-ring-gsm1, or a custom context from extensions.conf
   #   group: 1
   #   recipients: null         # null = telegram.default_recipients
-  #   sender_routes: []        # extra chats for one sender on this modem, e.g. [{ sender: "INFO", recipients: ["111222333"] }]
+  #   sender_routes: []        # extra chats for one sender on this modem, e.g. [{ sender: "INFO", recipients: ["111222333"], only: false }]
 # Starter phones: each secret is the phone's own number, so change them on the Phones page. All start internal only;
 # assigning modem gsm1 links 504-508 to it, gsm2 links 511-515. 509/510 use direct media.
 phones:

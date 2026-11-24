@@ -76,7 +76,7 @@ const modem = (fields) => ({
 });
 
 export const modems = () => [
-  modem({ sender_routes: [{ sender: 'INFO', recipients: ['123456789', '-1001234567890'] }] }),
+  modem({ sender_routes: [{ sender: 'INFO', recipients: ['123456789', '-1001234567890'], only: false }] }),
   modem({
     id: 'gsm2',
     driver: 'dongle',

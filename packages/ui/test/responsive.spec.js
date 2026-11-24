@@ -769,6 +769,7 @@ test.describe('the modem page', () => {
     // The fixture gives gsm1 one rule: INFO with two chats.
     await expect(rule(1).getByLabel(ru['modem.route_sender'])).toHaveValue('INFO');
     await expect(rule(1).getByRole('button', { name: ru['list.remove'].replace('{item}', '-1001234567890') })).toBeVisible();
+    await expect(rule(1).getByLabel(ru['modem.route_only'])).not.toBeChecked();
     await noSidewaysScroll(page);
     await page.screenshot({ path: `test-results/screens/${info.project.name}-modem-routes.png`, fullPage: true });
 
@@ -791,6 +792,7 @@ test.describe('the modem page', () => {
     await chats.fill('555');
     await rule(2).getByRole('button', { name: ru['list.add'] }).click();
     await expect(rule(2).getByRole('button', { name: ru['list.remove'].replace('{item}', '555') })).toBeVisible();
+    await rule(2).getByLabel(ru['modem.route_only']).check();
     // INFO goes away; the rest is renumbered, and a blank rule added last is not a rule.
     await rule(1).getByRole('button', { name: ru['modem.route_remove_label'].replace('{n}', '1') }).click();
     await expect(rule(2)).toHaveCount(0);
@@ -807,6 +809,7 @@ test.describe('the modem page', () => {
     await expect(saved.getByRole('group')).toHaveCount(1);
     await expect(saved.getByRole('group').getByLabel(ru['modem.route_sender'])).toHaveValue('+1 234-567-890');
     await expect(saved.getByRole('button', { name: ru['list.remove'].replace('{item}', '555') })).toBeVisible();
+    await expect(saved.getByRole('group').getByLabel(ru['modem.route_only'])).toBeChecked();
 
     // Removing the last rule saves an empty list.
     await saved.getByRole('button', { name: ru['modem.route_remove_label'].replace('{n}', '1') }).click();

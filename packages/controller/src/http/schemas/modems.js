@@ -13,7 +13,7 @@ const DEVICE = { type: 'string', pattern: '^/dev(?:/[A-Za-z0-9_.:+@-]+)+$' };
 const OWN_NUMBER = { type: 'string', pattern: '^\\+[0-9]{6,15}$' };
 
 // Only the shape of a sender rule: the registry reports an empty sender, a bad chat id or an unknown key with its path.
-const SENDER_ROUTE = { type: 'object', properties: { sender: { type: 'string' }, recipients: { type: 'array', maxItems: 32 } } };
+const SENDER_ROUTE = { type: 'object', properties: { sender: { type: 'string' }, recipients: { type: 'array', maxItems: 32 }, only: { type: 'boolean' } } };
 
 /** The fields a modem has in config/aster.yaml; POST requires id, driver and imei, PUT takes any subset but never the id. */
 const FIELDS = {

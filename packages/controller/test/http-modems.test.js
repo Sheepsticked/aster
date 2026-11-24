@@ -232,7 +232,7 @@ describe('http modem routes', () => {
       const { cookie } = await h.login();
       const put = (/** @type {unknown} */ sender_routes) => h.app.inject({ method: 'PUT', url: '/api/modems/gsm1', headers: { cookie }, payload: { sender_routes } });
       const get = async (/** @type {string} */ id) => (await h.app.inject({ method: 'GET', url: `/api/modems/${id}`, headers: { cookie } })).json().modem;
-      const routes = [{ sender: 'INFO', recipients: ['-100900', '7'] }, { sender: '+1234567890', recipients: ['42'] }];
+      const routes = [{ sender: 'INFO', recipients: ['-100900', '7'], only: true }, { sender: '+1234567890', recipients: ['42'], only: false }];
       let response = await put(routes);
       assert.equal(response.statusCode, 200);
       assert.deepEqual(response.json().modem.sender_routes, routes);
@@ -242,7 +242,7 @@ describe('http modem routes', () => {
       assert.deepEqual(h.onDisk().registry.modems[0]?.sender_routes, routes);
 
       response = await put([{ sender: 'Bank', recipients: ['5'] }]);
-      assert.deepEqual((await get('gsm1')).sender_routes, [{ sender: 'Bank', recipients: ['5'] }]);
+      assert.deepEqual((await get('gsm1')).sender_routes, [{ sender: 'Bank', recipients: ['5'], only: false }], 'a rule without only is not only');
       response = await put([]);
       assert.equal(response.statusCode, 200);
       assert.deepEqual(h.onDisk().registry.modems[0]?.sender_routes, []);
@@ -269,6 +269,7 @@ describe('http modem routes', () => {
       assert.deepEqual(await problems([{ sender: 'INFO' }]), ['modems[0].sender_routes[0].recipients']);
       assert.deepEqual(await problems([{ sender: 'x'.repeat(33), recipients: ['5'] }]), ['modems[0].sender_routes[0].sender']);
       assert.deepEqual(await problems([{ sender: 'INFO', recipients: ['5'], extra: 1 }]), ['modems[0].sender_routes[0].extra']);
+      assert.equal((await put([{ sender: 'INFO', recipients: ['5'], only: 'yes' }])).statusCode, 400);
       assert.equal((await put(Array.from({ length: 65 }, () => ({ sender: 'a', recipients: ['5'] })))).statusCode, 400);
       assert.equal((await put('INFO')).statusCode, 400);
       assert.deepEqual([h.applies.length, h.onDisk().hash], [0, before]);

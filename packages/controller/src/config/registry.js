@@ -29,6 +29,7 @@ import { Document, isMap, isScalar, isSeq, LineCounter, parseDocument, visit } f
  * @typedef {object} SenderRoute  chats that also get the SMS and missed calls of one sender (a number or a text name)
  * @property {string} sender
  * @property {readonly string[]} recipients
+ * @property {boolean} only  the sender's events go to the chats of its rules alone, not to the modem's usual recipients
  */
 /**
  * @typedef {object} Phone
@@ -54,7 +55,7 @@ const KEYS = {
   settings: ['ui_language', 'timezone', 'retention_days'],
   retention: ['operations', 'notifications', 'messages', 'calls'],
   telegram: ['default_recipients', 'alerts', 'alert_recipients'],
-  senderRoute: ['sender', 'recipients'],
+  senderRoute: ['sender', 'recipients', 'only'],
   modem: ['id', 'driver', 'imei', 'phone_number', 'enabled', 'uac', 'usb_port', 'ring', 'ring_timeout', 'incoming_context', 'group', 'recipients', 'sender_routes', 'ports'],
   ports: ['data', 'audio'],
   phone: ['number', 'label', 'secret', 'outbound', 'context', 'direct_media'],
@@ -440,11 +441,12 @@ function normalizePhone(c, raw, path, seen) {
  * @returns {SenderRoute | undefined}
  */
 function normalizeSenderRoute(c, raw, path) {
-  if (!c.mapping(raw, path, KEYS.senderRoute, KEYS.senderRoute)) return undefined;
+  if (!c.mapping(raw, path, KEYS.senderRoute, ['sender', 'recipients'])) return undefined;
   const sender = c.field(raw, 'sender', path, '', isSender, MESSAGE.sender);
   const recipients = Object.hasOwn(raw, 'recipients') ? c.list(raw.recipients, `${path}.recipients`, matching(CHAT_ID), MESSAGE.chatId) : [];
   if (Array.isArray(raw.recipients) && raw.recipients.length === 0) c.fail(`${path}.recipients`, 'must list at least one chat id');
-  return { sender, recipients };
+  const only = c.field(raw, 'only', path, false, isBoolean, MESSAGE.bool);
+  return { sender, recipients, only };
 }
 
 /**

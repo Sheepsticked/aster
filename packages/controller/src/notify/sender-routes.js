@@ -1,5 +1,5 @@
 // @ts-check
-// Sender routes: extra Telegram chats for the SMS and missed calls of chosen senders on one modem (registry modems[].sender_routes).
+// Sender routes: extra (or, with `only`, the sole) Telegram chats for the SMS and missed calls of chosen senders on one modem (registry modems[].sender_routes).
 
 /** @typedef {import('../config/registry.js').SenderRoute} SenderRoute */
 
@@ -19,18 +19,15 @@ function matches(rule, sender) {
 }
 
 /**
- * The chats `normal` plus those of every rule that names `sender`, each chat once, in that order.
+ * The chats of every rule that names `sender`, after `normal` unless one of those rules is `only`; each chat once.
  * @param {readonly SenderRoute[]} routes
  * @param {string | null | undefined} sender  an SMS sender or a caller; empty or missing matches nothing
  * @param {readonly string[]} normal  the chats the event goes to anyway
  * @returns {string[]}
  */
 export function withSenderRoutes(routes, sender, normal) {
-  const chats = new Set(normal);
-  if (sender) {
-    for (const route of routes) {
-      if (matches(route.sender, sender)) for (const chat of route.recipients) chats.add(chat);
-    }
-  }
+  const found = sender ? routes.filter((route) => matches(route.sender, sender)) : [];
+  const chats = new Set(found.some((route) => route.only) ? [] : normal);
+  for (const route of found) for (const chat of route.recipients) chats.add(chat);
   return [...chats];
 }
